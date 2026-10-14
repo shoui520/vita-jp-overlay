@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """The linefind development regions as raw RGBA, for host/vocr_parallel_bench.c.
 
-  vocr_regions_pack.py --manifests DIR --test-games TEST_GAMES.json --shots DIR [--shots DIR ...] -o REGIONS.bin
+  vocr_regions_pack.py --manifests DIR --test-games TEST_GAMES.json --reserved RESERVED.json
+                       --shots DIR [--shots DIR ...] -o REGIONS.bin
 
 Only vita-vn-ocr's eval/linefind/manifests vita_dev.jsonl and psp_dev.jsonl are read; protected sets
 (vita-test, psp-test, fresh native, CLANNAD) are refused as tools/capture_parity.py refuses them, and so is
-every VN its eval/manifests/test_games.json reserves ("all", "vita-test", "psp-test", their families). Masks are
+every VN vita-vn-ocr reserves: its eval/manifests/reserved.json "test" (the CLANNAD family, vita-test,
+psp-test and their shared releases) and eval/manifests/test_games.json ("all", "vita-test", "psp-test",
+their families). Masks are
 filled as build_gt.load_shot fills them. The pack holds crops of copyrighted screenshots: keep it outside
 the repository. Output: u32 count, then per region u32 width, u32 height, width x height RGBA bytes.
 """
@@ -25,10 +28,12 @@ def main(argv=None):
     ap.add_argument("--manifests", required=True)
     ap.add_argument("--shots", action="append", required=True)
     ap.add_argument("--test-games", required=True, help="vita-vn-ocr eval/manifests/test_games.json")
+    ap.add_argument("--reserved", required=True, help="vita-vn-ocr eval/manifests/reserved.json")
     ap.add_argument("-o", "--out", required=True)
     args = ap.parse_args(argv)
     t = json.loads(Path(args.test_games).read_text(encoding="utf-8"))
     reserved = set(t["all"]) | set(t["vita-test"]) | set(t["psp-test"]) | {"v4"}
+    reserved |= set(json.loads(Path(args.reserved).read_text(encoding="utf-8"))["test"])
     for k, members in t.get("family", {}).items():
         if k in reserved or reserved.intersection(members):
             reserved |= {k, *members}

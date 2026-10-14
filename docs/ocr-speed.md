@@ -21,7 +21,7 @@ the recognition 2-3 times faster in four steps; every one keeps the text exactly
 | recognition, 1 core | 1.22 s | 0.69 s | 0.52 s | console 5.07 ms/frame; after: vita-vn-ocr's A9 estimate calibrated to it |
 | recognition, 2 cores free | - | 0.46 s | 0.35 s | estimate: lines 1-2 at once, then 3 |
 | recognition, 3 cores free | - | 0.23 s | 0.17 s | estimate: the 3 lines at once |
-| the same box again | 1.22 s | 0 (cache), plus about 1-2 ms of hashing (estimate) | same | host: 0 recognitions on the 2nd pass of 367 regions |
+| the same box again | 1.22 s | 0 (cache), plus about 1-2 ms of hashing (estimate) | same | host: 0 recognitions on the 2nd pass of 363 regions |
 
 How many cores a game leaves to the overlay is unmeasured; the lines run at the lowest user priority,
 so every game thread preempts them. What test.1 does show: the worker's wall time per frame stayed within
@@ -57,9 +57,10 @@ row check, the blank-line check, the cache), copies a line it hands to a helper 
 next fetch rewrites it), and places every line's text, stats and cache entry in line order. A helper
 runs `vocr_run` on its own arena and context over the shared, read-only weights; the last line, and any
 line when no helper is free, runs on the job's thread. `vocr_run` is deterministic and shares nothing
-else, so the text is the serial job's: on the 367 linefind development regions (856 lines, 31,057
-frames; the 5 rows of v1267, reserved as a shared release since vita-vn-ocr #81, are refused) with the
-real VOCR3-H15 weights, serial, 1 helper, 2 helpers and the cache gave **0 different texts** (`host/vocr_parallel_bench.c`, `tools/vocr_regions_pack.py`).
+else, so the text is the serial job's: on the 363 linefind development regions (845 lines, 30,571
+frames; the 9 rows of v1267, v4060 and v36, which vita-vn-ocr reserves for its test sets, are refused)
+with the real VOCR3-H15 and VOCR3-FL10 weights, serial, 1 helper, 2 helpers and the cache gave **0
+different texts** (`host/vocr_parallel_bench.c`, `tools/vocr_regions_pack.py`).
 
 What overlaps: while a helper recognizes line i, the job's thread fetches line i+1 (a strip re-read,
 one display frame, when the line is not in the strip it holds) and hands it on. What does not: the
@@ -76,9 +77,9 @@ free memory minus the 4 MiB reserve is short. A cancelled job stops its helpers 
 tile and joins them before it returns; a helper that cannot be joined keeps the workspace allocated
 and the worker takes no more jobs.
 
-Host timing (x86, 5 threads of a shared box; only the division of the work, not Vita numbers): 52.7 ms
-per region serially, 39.7 ms with one helper, 32.0 ms with two (the regions average 2.3 lines; a
-one-line region gains nothing); the same regions again from the cache: 0.79 ms.
+Host timing (x86, 5 threads of a shared box; only the division of the work, not Vita numbers), H15:
+52.4 ms per region serially, 39.5 ms with one helper, 31.8 ms with two (the regions average 2.3 lines;
+a one-line region gains nothing); the same regions again from the cache: 0.78 ms.
 
 ## The line cache
 
