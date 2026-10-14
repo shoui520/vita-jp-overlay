@@ -34,6 +34,9 @@ game vocr speed: 330 frames in 820000 us, 2484 us per frame
 game vocr lines: 877x30 110f 273.3ms 870x30 110f 273.3ms 860x30 110f 273.3ms
 gstep job alloc kind=user arg=capture rc=0x00000041 bytes=61440 sum=0x00000000 main=91164672 cdram=117440512 phycont=0 us=30
 gstep job settle kind=- arg=4 rc=0x00000001 bytes=37 sum=0x00020006 main=0 cdram=0 phycont=0 us=183000
+gstep job par kind=- arg=2 rc=0x00000002 bytes=533504 sum=0x00015A62 main=0 cdram=0 phycont=0 us=410000
+gstep job clock kind=- arg=333 rc=0x00000000 bytes=444 sum=0x0000014D main=0 cdram=0 phycont=0 us=411000
+gstep job pace kind=- arg=31 rc=0x0000C351 bytes=533340 sum=0x00000001 main=3000000 cdram=17000 phycont=0 us=180
 gstep job blank kind=- arg=2 rc=0x00000001 bytes=19660830 sum=0x00C00014 main=0 cdram=0 phycont=0 us=310
 job 0 done rc=0 in 2100 ms, arena peak 4096, dictionary page 1/1
 gstep job blank kind=- arg=0 rc=0x00000006 bytes=19660830 sum=0x00C00010 main=0 cdram=0 phycont=0 us=410
@@ -202,6 +205,12 @@ class Collect(unittest.TestCase):
                      "waited 183-183 ms (4-4 passes); 37 row change(s) seen while waiting (text typing out); rows toggling "
                      "(an icon) in 1 job(s)",
                      "blank lines skipped: 7 (300x30, 300x30, 300x30, 300x30, 300x30; edges 16-20 per 10,000)",
+                     "parallel lines: 1 job(s) with helpers 2-2; 2 line(s) on a helper, 0 helper(s) did not start, 1 "
+                     "line(s) from the cache; the recognizing threads' share of a core: lowest 90-90%, mean 98-98%",
+                     "ARM clock (ocr_boost_clock): 1 job(s), raised in 1; MHz before 333-333, during 444-444, after "
+                     "333-333",
+                     "game frames during OCR jobs: 31 in 1 job(s), longest gap 50-50 ms, 1 over 25 ms; between jobs "
+                     "180 frames, longest gap 17-17 ms, 0 over 25 ms",
                      "game memory: free USER 5,000,000-91,226,112 B; headroom -99,520-85,622,784 B; refused 1 of 2",
                      "game worker steps that failed: alloc user/workspace 0x80024302",
                      "overlay opened 1x, slowest frame 33 ms",

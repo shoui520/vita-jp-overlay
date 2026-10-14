@@ -125,7 +125,7 @@ static int anki_configured, anki_reaps, anki_stop_rc, anki_counts;
  * one job runs, recorded here. */
 static int selftest_armed, selftest_games, selftest_steps, selftest_done;
 static unsigned selftest_begins, selftest_ends, selftest_stage_count;
-static uint32_t selftest_flags_seen[8];
+static uint32_t selftest_flags_seen[8], selftest_speed_seen[8];
 static int selftest_rcs[8];
 static VjoRect selftest_region;
 /* shell/selftest.c's order: the last stage's result is the job's */
@@ -199,7 +199,7 @@ int vjoOcrSubmit(const VjoGameOcrRequest *r)
     fake_game_request = *r;
     TEST_CHECK(!vocr_live && !(r->flags & ~VJO_GAME_OCR_F_ALL));
     TEST_CHECK(capture_held_now); /* the game captures with the Shell's capture lock held */
-    if (submits < 8) selftest_flags_seen[submits] = r->flags;
+    if (submits < 8) selftest_flags_seen[submits] = r->flags, selftest_speed_seen[submits] = r->speed;
     submits++;
     fake_game_request.seq = 12;
     fake_game_request.width = raw_state.width; fake_game_request.height = raw_state.height;
@@ -2221,6 +2221,8 @@ static void test_selftest_stages_run_in_one_job_and_finish(void)
                (selftest_flags_seen[3] & stage_bits) == VJO_GAME_OCR_F_PROBE &&
                (selftest_flags_seen[4] & stage_bits) == 0);
     for (unsigned i = 0; i < 5; i++) {
+        /* API 21: the default ocr_threads = 3 (two helpers), the clock off */
+        TEST_CHECK(selftest_speed_seen[i] == 2u);
         TEST_CHECK((selftest_flags_seen[i] & ~(stage_bits | VJO_GAME_OCR_F_SETTLE_FIRST)) == policy);
         TEST_MSG("stage %u flags 0x%08X", i, (unsigned)selftest_flags_seen[i]);
     }

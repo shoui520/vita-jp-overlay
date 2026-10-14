@@ -279,6 +279,13 @@ keeps soft text (a PSP game shown 2x, an upscaled render) it finds next to
 nothing to skip in the test screenshots. Both are logged per job; see
 [stable text and blank lines](docs/vita-vn-ocr.md#stable-text-and-blank-lines-api-20)
 for what each costs and what the host measurements show.
+Recognition runs up to three lines at once (`ocr_threads = 3`, the default; `1` reads one line
+after another), each on its own thread at the lowest priority on the game's cores, and a line whose
+pixels are unchanged since an earlier job gets its earlier text without being recognized again; both
+give exactly the serial job's text. `ocr_boost_clock = on` (off by default) raises the ARM clock to
+444 MHz while a job recognizes and puts it back after. The log shows each job's helpers, its lines'
+share of a core, the clock, and the game's frame pacing during the job against the time before it
+([OCR speed](docs/ocr-speed.md); estimates until a console run).
 The complete settings template is
 [docs/config.example.ini](docs/config.example.ini).
 
@@ -390,7 +397,7 @@ previous BUSY value `-3` arrived as `0xBFFFFFFD`, so the game failed to poll a
 pending model operation and retained its job ownership. The new codes match
 that return encoding and also remain consistent in copied status fields.
 Native SDK file errors are unchanged. Install all three plugins of one build
-together (API 20 since the job policy below) and reboot; older plugin versions
+together (API 21 since the OCR speed settings) and reboot; older plugin versions
 cannot use this transport.
 
 The `*main` plugin handles UI and disk-backed dictionary lookup with one

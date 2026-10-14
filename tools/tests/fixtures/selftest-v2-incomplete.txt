@@ -1,4 +1,4 @@
-selftest v2 api=20
+selftest v2 api=21
 boot seq=2 mode=0 prev=0/0/0/0 failures=0 write=0x00000000
 config backend=2 model=H15_w8.vocr fallback=FL10_w8.vocr dictionary=3 anki=0
 step boot t=0

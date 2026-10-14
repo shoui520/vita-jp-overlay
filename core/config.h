@@ -68,6 +68,11 @@ typedef struct {
     int ocr_settle_ms;        /* 0..1000 */
     int ocr_settle_max_ms;    /* 100..10000 */
     int ocr_skip_blank_lines; /* 0/1 */
+    /* Local OCR (vocr, ocr-speed): threads that recognize a region's lines at
+     * once (1 = one line after another), and the ARM clock at 444 MHz while a
+     * job recognizes (off by default; core/vocr_ocr.h VjoVocrPool, busy). */
+    int ocr_threads;          /* 1..3 */
+    int ocr_boost_clock;      /* 0/1 */
     char log_host[64];        /* "" = UDP log off */
     int log_file;             /* 0/1 */
     int anki_mining;          /* 0/1: × saves cards to the offline queue, △ sends it */

@@ -265,6 +265,19 @@ if(VJO_WITH_VOCR)
   target_compile_options(vjo-vocr-policy-tests PRIVATE -Wall -Wextra)
   target_compile_definitions(vjo-vocr-policy-tests PRIVATE VJO_VOCR_MODEL_DIR="${VJO_VOCR_MODEL_DIR}")
   add_test(NAME vocr_policy COMMAND vjo-vocr-policy-tests)
+  # ocr-speed: parallel lines (VjoVocrPool) and the line cache with real vocr_run
+  # calls on a tiny weights blob the test builds and pins itself (no release files).
+  add_executable(vjo-vocr-parallel-tests host/tests/test_vocr_parallel.c core/vocr_ocr.c)
+  target_include_directories(vjo-vocr-parallel-tests PRIVATE third_party/acutest/include host/tests core include
+    third_party/bearssl/inc)
+  target_compile_options(vjo-vocr-parallel-tests PRIVATE -Wall -Wextra)
+  target_compile_definitions(vjo-vocr-parallel-tests PRIVATE VJO_VOCR_TEST_MODELS="test_parallel_models.h")
+  find_package(Threads REQUIRED)
+  target_link_libraries(vjo-vocr-parallel-tests vjo_vocr_rt vjo_host bearssl Threads::Threads)
+  add_test(NAME vocr_parallel COMMAND vjo-vocr-parallel-tests)
+  # ocr-speed: serial against helpers (and the cache) on real regions with real weights (host only).
+  add_executable(vjo-vocr-parallel-bench host/vocr_parallel_bench.c)
+  target_link_libraries(vjo-vocr-parallel-bench vjo_vocr vjo_host Threads::Threads)
   # #74: API 18's capture (the kernel's A8B8G8R8 copy of the region, the worker's
   # grey plane; 8228c3c, verbatim in host/tests/api18) against API 19's (the
   # display hook's grey rows in the worker's strip): the recognizer gets

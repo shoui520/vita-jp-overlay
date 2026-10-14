@@ -25,7 +25,7 @@
  * its limit, waiting first, blank lines skipped); two new step kinds (settle,
  * blank). A job may publish its first pass, void it (a VJO_ROWS_SIG read from
  * row 0 it does not finish) and publish its retry's. Sizes are unchanged. */
-#define VJO_API_VERSION 20
+#define VJO_API_VERSION 21
 
 /* Normalized rectangle, 0..65535 on both axes. w == 0 means full screen. */
 typedef struct {

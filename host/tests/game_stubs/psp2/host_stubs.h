@@ -50,6 +50,18 @@ int sceKernelStartThread(SceUID, SceSize, void *);
 int sceKernelWaitThreadEnd(SceUID, int *, void *);
 int sceKernelDeleteThread(SceUID);
 int sceKernelDelayThread(unsigned);
+/* psp2/kernel/threadmgr.h: a thread's run time (ocr-speed: each line's share of a core) */
+typedef uint64_t SceKernelSysClock;
+typedef struct { SceSize size; SceUID processId; char name[32]; unsigned attr, status; void *entry, *stack;
+                 int stackSize, initPriority, currentPriority, initCpuAffinityMask, currentCpuAffinityMask,
+                 currentCpuId, lastExecutedCpuId; unsigned waitType; SceUID waitId; int exitStatus;
+                 SceKernelSysClock runClocks; unsigned intrPreemptCount, threadPreemptCount, threadReleaseCount;
+                 int changeCpuCount; int fNotifyCallback; int reserved; } SceKernelThreadInfo;
+int sceKernelGetThreadInfo(SceUID, SceKernelThreadInfo *);
+SceUID sceKernelGetThreadId(void);
+/* psp2/power.h: the ARM clock (ocr-speed: ocr_boost_clock) */
+int scePowerGetArmClockFrequency(void);
+int scePowerSetArmClockFrequency(int);
 int sceAppMgrAppParamGetString(int, int, char *, SceSize);
 SceUID sceIoOpen(const char *, int, unsigned);
 SceOff sceIoLseek(SceUID, SceOff, int);

@@ -38,6 +38,14 @@
 #define VJO_GAME_OCR_SETTLE_MAX_SHIFT 24u
 #define VJO_GAME_OCR_SETTLE_MAX_UNIT_US 50000u
 #define VJO_GAME_OCR_F_ALL 0xFFFF001Fu
+/* API 21 (ocr-speed), VjoGameOcrRequest.speed: bits 0-1 the helper threads that
+ * recognize lines in parallel (0-2, VjoVocrPool: config ocr_threads minus one);
+ * bit 2 the ARM clock at 444 MHz while the job recognizes (ocr_boost_clock, off
+ * by default). Other bits are refused, as unknown flags are. */
+#define VJO_GAME_OCR_S_HELPERS_MASK 0x3u
+#define VJO_GAME_OCR_S_BOOST 0x4u
+#define VJO_GAME_OCR_S_ALL 0x7u
+#define VJO_PACE_SLOW_US 25000 /* a frame gap over 25 ms: a dropped frame at 60 fps */
 
 typedef struct {
     uint32_t size;
@@ -45,6 +53,7 @@ typedef struct {
     uint32_t capture_seq; /* Assigned by Submit: VjoState.done_seq reaches it once the job's first
                              pass over the region is in (vjoOcrCaptureRows with VJO_ROWS_LAST) */
     uint32_t flags;       /* VJO_GAME_OCR_F_* */
+    uint32_t speed;       /* API 21: VJO_GAME_OCR_S_* */
     /* Filled by Submit: the kernel's region (normalized; w == 0 is the whole frame), the size of
      * the game's last frame and the region's pixels in it, which every row request reads. */
     VjoRect region;
@@ -109,6 +118,17 @@ enum {
                             bytes = width << 16 | height, sum = contrast (98th - 2nd percentile grey) << 16 |
                             sharp edges per 10,000 pixels (core/vocr_ocr.h VjoVocrInk), us the job's time
                             checking lines */
+    VJO_GSTEP_PAR,       /* API 21, parallel lines: arg helpers used, rc lines on helpers, bytes the
+                            helpers' workspace and stacks, sum helpers that did not start << 24 | lines
+                            from the cache << 16 | the recognized lines' lowest share of a core << 8 |
+                            their mean share (percent, run time / wall time; 0 unknown), us the
+                            recognition */
+    VJO_GSTEP_CLOCK,     /* API 21, ocr_boost_clock: arg the ARM MHz before, bytes during, sum after,
+                            rc the set call's result (or 1: already at 444 or more, not raised) */
+    VJO_GSTEP_PACE,      /* API 21, added by the kernel: the game's frames during the job, arg how many,
+                            rc the longest gap (us), bytes their sum (us), sum the gaps over
+                            VJO_PACE_SLOW_US; and since the job before: us how many frames, main their
+                            sum, cdram the longest gap, phycont the gaps over VJO_PACE_SLOW_US */
     VJO_GSTEP_COUNT
 };
 /* VJO_GSTEP_SETTLE rc. */

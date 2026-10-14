@@ -107,6 +107,7 @@ static int display_hook(int head, int index, const SceDisplayFrameBuf *p, int sy
     fb.w = p->width;
     fb.h = p->height;
     fb.us = ksceKernelGetSystemTimeWide();
+    game_ocr_frame(fb.us);
     fb_publish(&fb);
     on_frame(&fb);
 out:

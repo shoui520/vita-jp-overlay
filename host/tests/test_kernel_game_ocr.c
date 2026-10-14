@@ -269,6 +269,38 @@ static void take(uint32_t seq)
     strcpy(message.text, "猫");
 }
 
+/* API 21 (ocr-speed): the game's frame pacing per job, as one step the kernel adds
+ * to the job's result: the frames during the job (from its claim to its
+ * completion) and those since the job before, their longest gap, their sum, the
+ * gaps over VJO_PACE_SLOW_US. */
+static void frame_pacing_step(void)
+{
+    setup();
+    uint32_t seq = submit();
+    int64_t t = 1000000;
+    for (unsigned i = 0; i < 10; i++) game_ocr_frame(t += 16667); /* before the job: 60 fps */
+    take(seq);
+    for (unsigned i = 0; i < 6; i++) game_ocr_frame(t += 16667);
+    game_ocr_frame(t += 50001); /* one dropped frame (two at 60 fps) during the job */
+    game_ocr_frame(t += 16667);
+    TEST_CHECK(vjoOcrComplete(&message) == 0);
+    caller = 3; TEST_CHECK(vjoOcrRead(seq, &message) == 0);
+    TEST_ASSERT(message.n_steps == 1);
+    const VjoGameOcrStep *p = &message.step[0];
+    TEST_CHECK(p->id == VJO_GSTEP_PACE && p->arg == 8 && p->rc == 50001 && p->sum == 1);
+    TEST_CHECK(p->bytes == 7u * 16667u + 50001u);
+    TEST_CHECK(p->us == 9 && p->free_main == 9 * 16667 && p->free_cdram == 16667 && p->free_phycont == 0);
+    TEST_MSG("pace: job %u frames, max %d, sum %u, slow %u; before %u frames, sum %d, max %d", p->arg, (int)p->rc,
+             (unsigned)p->bytes, (unsigned)p->sum, (unsigned)p->us, (int)p->free_main, (int)p->free_cdram);
+    /* the next job's window starts again; a full step log gets no pacing step */
+    seq = submit();
+    game_ocr_frame(t += 16667);
+    take(seq);
+    message.n_steps = VJO_GAME_OCR_STEPS;
+    TEST_CHECK(vjoOcrComplete(&message) == 0);
+    caller = 3; TEST_CHECK(vjoOcrRead(seq, &message) == 0 && message.n_steps == VJO_GAME_OCR_STEPS);
+}
+
 static void registration_and_permissions(void)
 {
     setup(); caller = 8;
@@ -406,6 +438,8 @@ static void invalid_capture_and_wire(void)
     r.flags = 0x80; TEST_CHECK(vjoOcrSubmit(&r) == VJO_ERR_ARG);
     r.flags = 0x20; TEST_CHECK(vjoOcrSubmit(&r) == VJO_ERR_ARG); /* API 20: bits 5-15 are still unknown */
     r.flags = 0;
+    r.speed = 0x8; TEST_CHECK(vjoOcrSubmit(&r) == VJO_ERR_ARG); /* API 21: VJO_GAME_OCR_S_* bits 3-31 unknown */
+    r.speed = VJO_GAME_OCR_S_ALL; /* helpers and the clock: known */
     /* A Lens/Anki capture in flight: the OCR job waits for it. */
     g.capture_state = CAPTURE_PENDING; TEST_CHECK(vjoOcrSubmit(&r) == VJO_ERR_BUSY);
     g.capture_state = CAPTURE_IDLE; uint32_t seq = submit(); take(seq);
@@ -945,6 +979,7 @@ TEST_LIST = {
     {"rows: the destination stride is bounded (no wrapped span)", rows_stride_is_bounded},
     {"rows: a process exit never pulls state or the strip from a call", rows_process_exit_cannot_pull_state_from_a_call},
     {"rows: a pending request pins captures; process exit clears it", rows_pending_pins_and_process_exit},
+    {"API 21: the frame pacing of each job, one step the kernel adds", frame_pacing_step},
     {"registration and caller permissions", registration_and_permissions},
     {"completion and stale replacement", complete_and_replacement},
     {"queued and claimed capture pins", capture_pins_queued_and_claimed},

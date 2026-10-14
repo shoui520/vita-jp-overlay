@@ -39,7 +39,7 @@ target_include_directories(vjo_smoke PRIVATE ${ROOT}/core ${ROOT}/include ${RT} 
 target_compile_definitions(vjo_smoke PRIVATE VJO_GAME_OCR_NO_MODULE_ENTRY=1 VJO_WITH_VOCR=1)
 target_compile_options(vjo_smoke PRIVATE ${ARCH} -O2 -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(vjo_smoke smoke_vocr_rt smoke_bearssl m
-  SceDisplay_stub SceSysmem_stub SceKernelThreadMgr_stub SceIofilemgr_stub SceLibKernel_stub
+  SceDisplay_stub SceSysmem_stub SceKernelThreadMgr_stub SceIofilemgr_stub SceLibKernel_stub ScePower_stub_weak
   SceProcessmgr_stub SceAppMgr_stub)
 vita_create_self(eboot.bin vjo_smoke)
 vita_create_vpk(vjo_smoke.vpk ${VITA_TITLEID} eboot.bin VERSION ${VITA_VERSION} NAME ${VITA_APP_NAME})

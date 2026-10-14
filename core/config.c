@@ -96,6 +96,8 @@ void vjo_config_defaults(VjoConfig *c)
     c->ocr_settle_ms = 150;
     c->ocr_settle_max_ms = 2000;
     c->ocr_skip_blank_lines = 0;
+    c->ocr_threads = 3;
+    c->ocr_boost_clock = 0;
     c->log_file = 1; /* log.txt is on unless log_file = off */
     vjo_snprintf(c->anki_deck, sizeof(c->anki_deck), "Default");
     vjo_snprintf(c->anki_note_type, sizeof(c->anki_note_type), "Lapis");
@@ -180,6 +182,9 @@ const char *vjo_config_default_text(void)
            "; vocr: skip found lines with no ink (an even area, a smooth gradient): on | off\n"
            "; (off: it finds next to none at native resolution; see docs/vita-vn-ocr.md)\n"
            "ocr_skip_blank_lines = off\n"
+           "; vocr: lines recognized at once (1-3), and 444 MHz while recognizing (on | off)\n"
+           "ocr_threads = 3\n"
+           "ocr_boost_clock = off\n"
            "\n"
            "; auto: recognize text in the background when the region changes (lens, vocr)\n"
            "; on_press: recognize only when the overlay is opened\n"
@@ -589,6 +594,13 @@ static void set_kv(VjoConfig *c, const char *key, const char *val)
     } else if (vjo_ieq(key, "ocr_skip_blank_lines")) {
         if (vjo_ieq(val, "on")) c->ocr_skip_blank_lines = 1;
         else if (vjo_ieq(val, "off")) c->ocr_skip_blank_lines = 0;
+        else warn(c, "%s: invalid value '%s'", key, val);
+    } else if (vjo_ieq(key, "ocr_threads")) {
+        if (!strcmp(val, "1") || !strcmp(val, "2") || !strcmp(val, "3")) c->ocr_threads = val[0] - '0';
+        else warn(c, "%s: invalid value '%s' (1-3)", key, val);
+    } else if (vjo_ieq(key, "ocr_boost_clock")) {
+        if (vjo_ieq(val, "on")) c->ocr_boost_clock = 1;
+        else if (vjo_ieq(val, "off")) c->ocr_boost_clock = 0;
         else warn(c, "%s: invalid value '%s'", key, val);
     } else if (vjo_ieq(key, "ocr_mode")) {
         if (vjo_ieq(val, "auto"))

@@ -36,6 +36,7 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/sysmem.h>
 #include <psp2/kernel/threadmgr.h>
+#include <psp2/power.h>
 
 #define GAME_RESERVE VJO_GAME_RESERVE
 #define JOIN_US 2000000u
@@ -57,6 +58,9 @@ static SceUID worker = -1, workspace_uid = -1, weights_uid = -1, capture_uid = -
 /* A rows call returned BUSY: the display hook may still write into the capture
  * (or tall-line) block, so neither is freed (they go with the process). */
 static int hook_owns_capture;
+/* A helper thread could not be joined (core/vocr_ocr.h VjoVocrStats.stuck): it may
+ * still run in the job's workspace, so that block is never freed either. */
+static int hook_owns_workspace;
 static uint32_t workspace_bytes_held, weights_bytes_held, capture_bytes_held, line_bytes_held;
 static uint32_t capture_memory, workspace_memory; /* VJO_GAME_OCR_MEM_* of the blocks held */
 static void *line_base;
@@ -65,7 +69,7 @@ static void *line_base;
  * partition. The game has no file access, so it is read through the result
  * fields (workspace_bytes, resident_bytes, capture_bytes, the step log) rather
  * than printed here. */
-enum { GL_MODULE = 0, GL_STACK, GL_WEIGHTS, GL_WORKSPACE, GL_CAPTURE, GL_LINE, GL_COUNT };
+enum { GL_MODULE = 0, GL_STACK, GL_WEIGHTS, GL_WORKSPACE, GL_CAPTURE, GL_LINE, GL_HELPERS, GL_COUNT };
 static const VjoLedgerItemDef ledger_defs[GL_COUNT] = {
     [GL_MODULE] = {"OCR worker pages", VJO_LEDGER_POOL_GAME},
     [GL_STACK] = {"VjoGameVocr stack+TLS", VJO_LEDGER_POOL_GAME},
@@ -73,6 +77,7 @@ static const VjoLedgerItemDef ledger_defs[GL_COUNT] = {
     [GL_WORKSPACE] = {"VjoGameVocr workspace", VJO_LEDGER_POOL_GAME},
     [GL_CAPTURE] = {"VjoGameVocrCapture", VJO_LEDGER_POOL_GAME},
     [GL_LINE] = {"VjoGameVocrLine", VJO_LEDGER_POOL_GAME},
+    [GL_HELPERS] = {"VjoGameVocrHelper stacks+TLS", VJO_LEDGER_POOL_GAME},
 };
 VjoLedger g_game_ledger;
 
@@ -477,7 +482,7 @@ static int check_memory(VjoGameOcrResult *out, const VjoVocrModel *m, size_t job
 static int cleanup(void)
 {
     int rc = 0;
-    if (workspace_uid >= 0) {
+    if (workspace_uid >= 0 && !hook_owns_workspace) {
         if (game_memblock_free(GL_WORKSPACE, VJO_GITEM_WORKSPACE, workspace_uid, workspace_bytes_held) < 0)
             rc = VJO_E_OCR_UNAVAILABLE;
         else { workspace_uid = -1; workspace_bytes_held = 0; workspace_memory = 0; }
@@ -610,6 +615,131 @@ static int run_probe(const VjoGameOcrRequest *r, VjoGameOcrResult *out)
     return any ? rc : VJO_E_SOURCE;
 }
 
+/* ---- ocr-speed: helper threads for parallel lines (core/vocr_ocr.h VjoVocrPool) ----
+ * A line handed to a helper runs on a thread of its own, created for that line
+ * and deleted once its line is placed: no thread outlives a job, and no stack is
+ * held between jobs. Same priority and cores as the worker: the lowest user
+ * priority on every game core, so each game thread preempts them as it does the
+ * worker [SDK: Kernel-Overview, 'Notes on Priority and CPU Affinity Mask
+ * Combinations']. Their stacks come from the game's memory and go through the
+ * ledger (GL_HELPERS); the job's memory check counts them. */
+#define HELPER_STACK_BYTES VJO_STACK_GAME_HELPER
+#define HELPER_JOIN_US 10000000u /* a line takes under a second; a cancelled one stops within a tile */
+static SceUID helper_uid[1 + VJO_VOCR_HELPERS_MAX] = {-1, -1, -1};
+static struct {
+    void (*fn)(void *arg);
+    void *arg;
+} helper_job[1 + VJO_VOCR_HELPERS_MAX];
+static unsigned helper_creates, helper_create_failures;
+
+static int helper_entry(SceSize args, void *argp)
+{
+    unsigned slot = args == sizeof(unsigned) && argp ? *(const unsigned *)argp : 0u;
+    if (slot >= 1 && slot <= VJO_VOCR_HELPERS_MAX && helper_job[slot].fn) helper_job[slot].fn(helper_job[slot].arg);
+    return 0;
+}
+
+static int pool_run(void *ud, unsigned slot, void (*fn)(void *arg), void *arg)
+{
+    SceUID t;
+    (void)ud;
+    if (slot < 1 || slot > VJO_VOCR_HELPERS_MAX || helper_uid[slot] >= 0 || blocked) return -1;
+    helper_job[slot].fn = fn;
+    helper_job[slot].arg = arg;
+    t = sceKernelCreateThread("VjoGameVocrHelper", helper_entry, WORKER_PRIORITY, HELPER_STACK_BYTES, 0,
+                              WORKER_AFFINITY, NULL);
+    if (t < 0) { helper_create_failures++; return -1; }
+    vjo_ledger_add(&g_game_ledger, GL_HELPERS, VJO_BUDGET_GAME_HELPER_STACK);
+    if (sceKernelStartThread(t, sizeof(slot), &slot) < 0) {
+        helper_create_failures++;
+        if (sceKernelDeleteThread(t) >= 0) vjo_ledger_sub(&g_game_ledger, GL_HELPERS, VJO_BUDGET_GAME_HELPER_STACK);
+        else blocked = 1; /* a thread object we cannot delete: no more jobs */
+        return -1;
+    }
+    helper_uid[slot] = t;
+    helper_creates++;
+    return 0;
+}
+
+static int pool_join(void *ud, unsigned slot)
+{
+    SceUInt timeout = HELPER_JOIN_US;
+    (void)ud;
+    if (slot < 1 || slot > VJO_VOCR_HELPERS_MAX || helper_uid[slot] < 0) return -1;
+    if (sceKernelWaitThreadEnd(helper_uid[slot], NULL, &timeout) < 0) return -1;
+    if (sceKernelDeleteThread(helper_uid[slot]) < 0) return -1;
+    helper_uid[slot] = -1;
+    helper_job[slot].fn = NULL;
+    vjo_ledger_sub(&g_game_ledger, GL_HELPERS, VJO_BUDGET_GAME_HELPER_STACK);
+    return 0;
+}
+
+/* The calling thread's run time [SDK: Kernel-Reference, SceKernelThreadInfo.runClocks,
+ * microseconds since the thread was created], for each line's share of a core. */
+static uint64_t pool_thread_us(void *ud)
+{
+    SceKernelThreadInfo info;
+    (void)ud;
+    if (!IMPORT_READY(sceKernelGetThreadInfo) || !IMPORT_READY(sceKernelGetThreadId)) return 0;
+    sceClibMemset(&info, 0, sizeof(info));
+    info.size = sizeof(info);
+    if (sceKernelGetThreadInfo(sceKernelGetThreadId(), &info) < 0) return 0;
+    return (uint64_t)info.runClocks;
+}
+
+static const VjoVocrPool helper_pool_base = {0, pool_run, pool_join, pool_thread_us, NULL};
+static VjoVocrPool helper_pool;
+/* Line texts of earlier jobs (core/vocr_ocr.h VjoVocrCache): a page read again
+ * is not recognized again. Emptied whenever the weights are read from the file. */
+static VjoVocrCache line_cache;
+
+/* Forget every cached line (tools/vita3k_smoke: the next job recognizes every line). */
+void vjo_game_ocr_cache_clear(void);
+void vjo_game_ocr_cache_clear(void)
+{
+    sceClibMemset(&line_cache, 0, sizeof(line_cache));
+}
+
+/* ---- ocr-speed: the ARM clock while a job recognizes (ocr_boost_clock) ----
+ * Off by default. When the job asks for it, the clock goes to 444 MHz just
+ * before the first line is recognized and back to what it was once the last one
+ * is, unless the game changed it meanwhile. ScePower keeps the clock a process
+ * asked for and the system applies it while that process is in front: the
+ * worker's call is the game's own (PSVshell reads the same per-process value,
+ * Electry/PSVshell 9a47b0e src/oc.c:119-147, and hooks the setter to replace a
+ * game's request, src/main.c:106-123; this asks for the value only while it
+ * recognizes). 444 is the highest the API accepts without a kernel patch
+ * (PSVshell's 500 MHz needs one, main.c:113-117). Logged in the step log:
+ * before, during, after. */
+#define BOOST_MHZ 444
+static int boost_job, boost_raised;
+static int32_t boost_before, boost_during, boost_rc;
+
+static void job_busy(void *ud, int on)
+{
+    (void)ud;
+    if (!boost_job || !IMPORT_READY(scePowerGetArmClockFrequency) || !IMPORT_READY(scePowerSetArmClockFrequency))
+        return;
+    if (on) {
+        boost_before = scePowerGetArmClockFrequency();
+        if (boost_before > 0 && boost_before < BOOST_MHZ) {
+            boost_rc = scePowerSetArmClockFrequency(BOOST_MHZ);
+            boost_raised = boost_rc >= 0;
+        } else {
+            boost_rc = 1;
+        }
+        boost_during = scePowerGetArmClockFrequency();
+        return;
+    }
+    if (boost_raised) {
+        /* Back to the clock before, unless the game set another one meanwhile. */
+        if (scePowerGetArmClockFrequency() == boost_during) scePowerSetArmClockFrequency(boost_before);
+        boost_raised = 0;
+    }
+    step_add(VJO_GSTEP_CLOCK, 0, boost_before > 0 ? (unsigned)boost_before : 0u, boost_rc,
+             boost_during > 0 ? (uint32_t)boost_during : 0u, (uint32_t)scePowerGetArmClockFrequency(), 0, 0);
+}
+
 /* The job's policy, from its request's flags (include/vjo_game_ocr.h, API 20):
  * the stable-text wait and its limit, whether to wait first, blank lines. */
 static void policy_sleep(uint32_t us)
@@ -625,6 +755,25 @@ static void request_policy(const VjoGameOcrRequest *r, VjoVocrPolicy *p)
     p->settle_first = (r->flags & VJO_GAME_OCR_F_SETTLE_FIRST) != 0;
     p->blank = (r->flags & VJO_GAME_OCR_F_BLANK) != 0;
     p->sleep = policy_sleep;
+    /* API 21: helpers, the line cache, the clock around the recognitions. */
+    helper_pool = helper_pool_base;
+    helper_pool.helpers = r->speed & VJO_GAME_OCR_S_HELPERS_MASK;
+    if (helper_pool.helpers > VJO_VOCR_HELPERS_MAX) helper_pool.helpers = VJO_VOCR_HELPERS_MAX;
+    p->pool = &helper_pool;
+    p->cache = &line_cache;
+    boost_job = (r->speed & VJO_GAME_OCR_S_BOOST) != 0;
+    boost_raised = 0;
+    boost_before = boost_during = boost_rc = 0;
+    p->busy = job_busy;
+}
+
+/* Bytes a job's helpers add (core/vocr_ocr.h vjo_vocr_helper_bytes, page-rounded
+ * with the workspace) and their stacks, for the memory check. */
+static size_t helpers_need(const char *model, unsigned w, unsigned h, unsigned helpers)
+{
+    size_t base = vjo_vocr_job_bytes(model, w, h), with = vjo_vocr_job_bytes_helpers(model, w, h, helpers);
+    if (!base || !with) return 0;
+    return PAGE_ROUND(with) - PAGE_ROUND(base) + (size_t)helpers * VJO_BUDGET_GAME_HELPER_STACK;
 }
 
 int vjo_game_ocr_run_request(const VjoGameOcrRequest *r, VjoGameOcrResult *out)
@@ -641,6 +790,7 @@ int vjo_game_ocr_run_request(const VjoGameOcrRequest *r, VjoGameOcrResult *out)
     Capture capture = {r, VJO_GAME_OCR_SRC_HOOK, {0}, 0, 0, 0, 0, 0, 0};
     if (blocked || workspace_uid >= 0 || capture_uid >= 0 || model_owned) { rc = VJO_E_OCR_UNAVAILABLE; goto done; }
     if (r->size != sizeof(*r) || !r->seq || !r->capture_seq || (r->flags & ~VJO_GAME_OCR_F_ALL) ||
+        (r->speed & ~VJO_GAME_OCR_S_ALL) ||
         !r->width || r->width > VJO_OCR_MAX_WIDTH || !r->height || r->height > VJO_OCR_MAX_HEIGHT ||
         !r->fb_width || r->fb_width > VJO_OCR_MAX_WIDTH || !r->fb_height || r->fb_height > VJO_OCR_MAX_HEIGHT ||
         r->x > r->fb_width - r->width || r->y > r->fb_height - r->height ||
@@ -687,6 +837,23 @@ int vjo_game_ocr_run_request(const VjoGameOcrRequest *r, VjoGameOcrResult *out)
         step_add(VJO_GSTEP_FALLBACK, 0, forced ? 1u : 0u, 0, 0, 0, 0, 0);
         step_add(VJO_GSTEP_CHECK, 0, 1, fits ? 0 : 1, out->need_workspace + out->need_weights, 0, 0, 0);
     }
+    /* Helpers (ocr_threads) only when they fit beside everything else: one
+     * fewer at a time, down to none, which is the serial job. */
+    unsigned want_helpers = r->speed & VJO_GAME_OCR_S_HELPERS_MASK;
+    unsigned use_helpers = 0;
+    if (want_helpers > VJO_VOCR_HELPERS_MAX) want_helpers = VJO_VOCR_HELPERS_MAX;
+    if (fits) {
+        for (use_helpers = want_helpers; use_helpers; use_helpers--) {
+            size_t extra = helpers_need(use->name, r->width, r->height, use_helpers);
+            if (extra && (int64_t)out->free_user + out->release_bytes - (int64_t)GAME_RESERVE >=
+                             (int64_t)out->need_workspace + out->need_weights + (int64_t)extra)
+                break;
+        }
+        if (use_helpers) {
+            use_bytes = vjo_vocr_job_bytes_helpers(use->name, r->width, r->height, use_helpers);
+            out->need_workspace += (uint32_t)helpers_need(use->name, r->width, r->height, use_helpers);
+        }
+    }
     stats.workspace = use_bytes;
     if (!fits) {
         /* Too little memory: give the game back the resident weights too. */
@@ -713,6 +880,8 @@ int vjo_game_ocr_run_request(const VjoGameOcrRequest *r, VjoGameOcrResult *out)
     VjoGreySource image = {&capture, r->width, r->height, strip_source, cancelled, line_buffer};
     VjoVocrPolicy policy;
     request_policy(r, &policy);
+    helper_pool.helpers = use_helpers;
+    helper_creates = helper_create_failures = 0;
     open_which = use == model ? VJO_GAME_OCR_OPEN_MODEL : VJO_GAME_OCR_OPEN_FALLBACK;
     rc = vjo_vocr_ocr_policy(&platform, r->model_dir, use->name, &image, &resident, base, use_bytes,
                              capture_base, capture_bytes_held, &policy, out->text, sizeof(out->text), &stats);
@@ -738,6 +907,27 @@ int vjo_game_ocr_run_request(const VjoGameOcrRequest *r, VjoGameOcrResult *out)
                  resident_bytes(), 0, stats.load_us, 1);
     if (stats.lines)
         step_add(VJO_GSTEP_RECOGNIZE, 0, stats.recognized, rc, stats.frames, stats.tall_skipped, stats.recognize_us, 0);
+    if (stats.lines && (want_helpers || stats.cached)) {
+        /* the recognized lines' share of a core: the lowest and the mean (percent; 0 unknown) */
+        uint32_t lo = 100u, sum = 0, n = 0;
+        for (unsigned i = 0; i < stats.recognized && i < VJO_VOCR_MAX_LINES; i++) {
+            const VjoVocrLineStat *ls = &stats.line[i];
+            uint32_t share;
+            if (ls->cached || !ls->us || !ls->cpu_us) continue;
+            share = (uint32_t)((uint64_t)ls->cpu_us * 100u / ls->us);
+            share = share > 100u ? 100u : share;
+            lo = share < lo ? share : lo;
+            sum += share;
+            n++;
+        }
+        step_add(VJO_GSTEP_PAR, 0, stats.helpers, (int32_t)stats.dispatched,
+                 (uint32_t)helpers_need(use->name, r->width, r->height, use_helpers),
+                 (stats.run_failures > 0xFFu ? 0xFFu : stats.run_failures) << 24 |
+                 (stats.cached > 0xFFu ? 0xFFu : stats.cached) << 16 | (n ? lo : 0u) << 8 | (n ? sum / n : 0u),
+                 stats.recognize_us ? stats.recognize_us : 1u, 0);
+    }
+    /* A helper that could not be joined may still run in the workspace: keep it. */
+    if (stats.stuck) { blocked = 1; hook_owns_workspace = 1; }
 done:
     out->workspace_bytes = (uint32_t)stats.workspace;
     out->lines = stats.lines; out->find_us = stats.find_us;
@@ -836,6 +1026,10 @@ int vjo_game_ocr_worker_start(void)
 int vjo_game_ocr_worker_stop(void)
 {
     __atomic_store_n(&quitting, 1, __ATOMIC_RELEASE);
+    /* A helper left by a job whose join failed: its code is this module's, so the
+     * module stays until it has ended (quitting cancels its line). */
+    for (unsigned k = 1; k <= VJO_VOCR_HELPERS_MAX; k++)
+        if (helper_uid[k] >= 0 && pool_join(NULL, k) < 0) return VJO_E_OCR_UNAVAILABLE;
     if (worker >= 0) {
         SceUInt timeout = JOIN_US;
         if (worker_started && sceKernelWaitThreadEnd(worker, NULL, &timeout) < 0) return VJO_E_OCR_UNAVAILABLE;

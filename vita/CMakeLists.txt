@@ -213,7 +213,7 @@ if(VJO_WITH_VOCR)
   target_link_directories(VitaJPOverlay_OCR PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/vjo_kernel_stubs)
   target_link_libraries(VitaJPOverlay_OCR vjo_vocr vjo_vocr_rt vjo_bearssl VitaJPOverlay_Kernel_stub_weak
     SceLibKernel_stub SceKernelThreadMgr_stub SceSysmem_stub_weak SceProcessmgr_stub_weak
-    SceIofilemgr_stub SceAppMgr_stub_weak SceDisplay_stub_weak gcc)
+    SceIofilemgr_stub SceAppMgr_stub_weak SceDisplay_stub_weak ScePower_stub_weak gcc)
   set(VITA_ELF_CREATE_FLAGS "${VJO_ELF_FLAGS}")
   set(VITA_MAKE_FSELF_FLAGS "${VJO_SELF_FLAGS}")
   vita_create_self(VitaJPOverlay_OCR.suprx VitaJPOverlay_OCR UNSAFE CONFIG ${ROOT}/game_ocr/exports.yml)

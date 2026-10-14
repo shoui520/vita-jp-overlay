@@ -48,7 +48,7 @@ ALLOWED = {
     ("kernel/buffers.c", "ksceKernelAllocMemBlock"): 2, # buffers_alloc (Shell JPEG), buffers_kstrip_alloc (OCR ladder's last rung)
     ("kernel/main.c", "ksceKernelCreateThread"): 1,  # the worker thread, counted right after
     ("game_ocr/main.c", "sceKernelAllocMemBlock"): 1, # game_memblock_alloc
-    ("game_ocr/main.c", "sceKernelCreateThread"): 1, # vjo_game_ocr_worker_start, counted right after
+    ("game_ocr/main.c", "sceKernelCreateThread"): 2, # vjo_game_ocr_worker_start and pool_run (a helper), each counted right after
 }
 
 POOLS = (
@@ -75,7 +75,7 @@ ITEMS = {
     "kernel": ("VJO_BUDGET_KERNEL_MODULE_PAGES", "VJO_BUDGET_KERNEL_STACK", "VJO_BUDGET_KERNEL_CAPTURE",
                "VJO_BUDGET_KERNEL_OCR_STRIP"),
     "game": ("VJO_BUDGET_GAME_MODULE_PAGES", "VJO_BUDGET_GAME_STACK", "VJO_BUDGET_GAME_WEIGHTS", "VJO_BUDGET_GAME_WORKSPACE",
-             "VJO_BUDGET_GAME_CAPTURE", "VJO_BUDGET_GAME_LINE"),
+             "VJO_BUDGET_GAME_CAPTURE", "VJO_BUDGET_GAME_LINE", "VJO_BUDGET_GAME_HELPERS"),
 }
 # Packaged module -> the macro its pages must not exceed.
 MODULE_BUDGETS = {

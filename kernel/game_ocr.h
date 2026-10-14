@@ -23,5 +23,7 @@ void game_ocr_process_gone(SceUID pid);
 /* Display hook (display.c on_frame, game context, no lock): copies an armed
  * vjoOcrCaptureRows of process pid from this frame. */
 void game_ocr_rows_hook(SceUID pid, uintptr_t base, uint32_t pitch, uint32_t fmt, uint32_t w, uint32_t h);
+/* ocr-speed: one of the game's frames (display hook, game context): the frame pacing per OCR job. */
+void game_ocr_frame(int64_t now_us);
 
 #endif

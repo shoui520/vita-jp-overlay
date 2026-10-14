@@ -151,6 +151,10 @@ static uint32_t fnv(const char *s)
     return h;
 }
 
+void vjo_game_ocr_cache_clear(void);
+static uint32_t stage_speed;     /* VjoGameOcrRequest.speed of the next stage (API 21: helpers, clock) */
+static uint32_t last_text_fnv;   /* the last stage's text */
+
 static int stage(const char *name, uint32_t flags, const char *model, const char *fallback, int full)
 {
     static VjoGameOcrResult r;
@@ -159,6 +163,7 @@ static int stage(const char *name, uint32_t flags, const char *model, const char
     job.seq = ++job_seq;
     job.capture_seq = job.seq;
     job.flags = flags;
+    job.speed = stage_speed;
     job.fb_width = W; job.fb_height = H;
     job.x = full ? 0 : 22; job.y = full ? 0 : 400; job.width = full ? W : 917; job.height = full ? H : 125;
     snprintf(job.model_dir, sizeof(job.model_dir), "ux0:data/VitaJPOverlay/ocr");
@@ -172,6 +177,7 @@ static int stage(const char *name, uint32_t flags, const char *model, const char
             (unsigned)r.source, (unsigned)r.capture_memory, (unsigned)r.capture_bytes, (unsigned)r.captures,
             (unsigned)r.tears, (unsigned)r.weights, (unsigned)r.resident_bytes, (unsigned)strlen(r.text),
             (unsigned)fnv(r.text), (unsigned)r.n_steps);
+    last_text_fnv = fnv(r.text);
     for (uint32_t i = 0; i < r.n_steps && i < VJO_GAME_OCR_STEPS; i++)
         fprintf(out, "  step %u kind=%u arg=%u rc=0x%08X bytes=%u main=%d cdram=%d\n", (unsigned)r.step[i].id,
                 (unsigned)r.step[i].kind, (unsigned)r.step[i].arg, (unsigned)r.step[i].rc, (unsigned)r.step[i].bytes,
@@ -190,6 +196,29 @@ static int run(SceSize args, void *argp)
     failures += stage("fallback", VJO_GAME_OCR_F_FORCE_FALLBACK, "H15_w8.vocr", "FL10_w8.vocr", 0) != 0;
     failures += stage("textbox", 0, "H15_w8.vocr", "FL10_w8.vocr", 0) != 0;
     failures += stage("fullscreen", VJO_GAME_OCR_F_FULL, "H15_w8.vocr", "FL10_w8.vocr", 1) != 0;
+    {
+        /* API 21: the same frame with two helper threads and no cached line: the same text */
+        uint32_t serial = last_text_fnv;
+        vjo_game_ocr_cache_clear();
+        stage_speed = 2;
+        failures += stage("fullscreen-threads", VJO_GAME_OCR_F_FULL, "H15_w8.vocr", "FL10_w8.vocr", 1) != 0;
+        stage_speed = 0;
+        if (last_text_fnv != serial) {
+            fprintf(out, "fullscreen-threads text 0x%08X differs from the serial job's 0x%08X\n",
+                    (unsigned)last_text_fnv, (unsigned)serial);
+            failures++;
+        }
+        /* and again: every line from the cache, the same text */
+        stage_speed = 2;
+        failures += stage("fullscreen-cached", VJO_GAME_OCR_F_FULL, "H15_w8.vocr", "FL10_w8.vocr", 1) != 0;
+        stage_speed = 0;
+        if (last_text_fnv != serial) {
+            fprintf(out, "fullscreen-cached text 0x%08X differs from the serial job's 0x%08X\n",
+                    (unsigned)last_text_fnv, (unsigned)serial);
+            failures++;
+        }
+        vjo_game_ocr_cache_clear();
+    }
     failures += stage("textbox2", 0, "H15_w8.vocr", "FL10_w8.vocr", 0) != 0;
     for (unsigned f = 1; f < 3; f++) {
         draw(fmts[f]);

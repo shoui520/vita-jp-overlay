@@ -107,7 +107,8 @@ static void test_game_workspace_budget_matches_the_layout(void)
     static const char *const models[] = {"FL10_w8.vocr", "H15_w8.vocr", "F20_w8.vocr", VJO_VOCR2_MODEL_NAME};
     size_t largest = 0;
     for (unsigned i = 0; i < sizeof(models) / sizeof(models[0]); i++) {
-        size_t bytes = vjo_vocr_job_bytes(models[i], VJO_OCR_MAX_WIDTH, VJO_OCR_MAX_HEIGHT);
+        /* API 21: with the most helpers a job takes (ocr_threads 3) */
+        size_t bytes = vjo_vocr_job_bytes_helpers(models[i], VJO_OCR_MAX_WIDTH, VJO_OCR_MAX_HEIGHT, VJO_VOCR_HELPERS_MAX);
         TEST_CHECK_(bytes > 0, "%s", models[i]);
         if (bytes > largest) largest = bytes;
         const VjoVocrModel *m = vjo_vocr_model(models[i]);

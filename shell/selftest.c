@@ -212,7 +212,7 @@ void vjo_selftest_stage_begin(unsigned i, const char *model, const char *fallbac
 
 static const char *const step_names[VJO_GSTEP_COUNT] = {
     "none", "mem", "check", "alloc", "free", "pass", "tear", "sig", "find", "load", "recognize", "fallback",
-    "fb", "probe", "settle", "blank"};
+    "fb", "probe", "settle", "blank", "par", "clock", "pace"};
 static const char *const mem_names[] = {"-", "user", "cdram", "phycont", "kernel"};
 static const char *const src_names[] = {"-", "hook", "kstrip", "user"};
 static const char *const item_names[] = {"-", "capture", "workspace", "weights", "probe", "line"};

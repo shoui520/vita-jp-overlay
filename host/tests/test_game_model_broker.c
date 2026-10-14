@@ -214,6 +214,12 @@ int sceKernelFreeMemBlock(SceUID uid)
 }
 SceUID sceKernelCreateThread(const char *name, int (*entry)(SceSize, void *), int p, unsigned stack, unsigned a, int cpu, void *opt) { return 20; }
 int sceKernelStartThread(SceUID uid, SceSize n, void *args) { return 0; }
+
+/* ocr-speed (API 21): the thread run time and the ARM clock; see test_game_vocr.c for the tested ones. */
+int sceKernelGetThreadInfo(SceUID thid, SceKernelThreadInfo *info) { (void)thid; (void)info; return -1; }
+SceUID sceKernelGetThreadId(void) { return 21; }
+int scePowerGetArmClockFrequency(void) { return 333; }
+int scePowerSetArmClockFrequency(int mhz) { (void)mhz; return 0; }
 int sceKernelWaitThreadEnd(SceUID uid, int *status, void *timeout) { return 0; }
 int sceKernelDeleteThread(SceUID uid) { return 0; }
 int sceKernelGetProcessTitleId(SceUID pid, char *out, SceSize size)
@@ -270,7 +276,18 @@ static void finish(const VjoGameOcrResult *out)
     VjoGameOcrResult received_result; caller = 3;
     int rc = vjoOcrRead(out->seq, &received_result);
     if (out->rc == VJO_E_CANCELLED) TEST_CHECK(rc == VJO_ERR_CANCELLED);
-    else TEST_CHECK(!rc && !memcmp(out, &received_result, sizeof(*out)));
+    else {
+        /* API 21: the kernel appends its frame-pacing step (VJO_GSTEP_PACE) when the log has room;
+         * the rest is the worker's result byte for byte. */
+        TEST_CHECK(!rc);
+        if (received_result.n_steps == out->n_steps + 1 &&
+            received_result.step[out->n_steps].id == VJO_GSTEP_PACE) {
+            memset(&received_result.step[out->n_steps], 0, sizeof(received_result.step[0]));
+            received_result.n_steps--;
+        }
+        TEST_CHECK(out->n_steps == VJO_GAME_OCR_STEPS || received_result.n_steps == out->n_steps);
+        TEST_CHECK(!memcmp(out, &received_result, sizeof(*out)));
+    }
     /* No kernel block was taken for OCR, and the worker's capture block is gone. */
     TEST_CHECK(!capture_live && !capture_allocations && !capture_block_live && !game_ocr_capture_busy_locked());
     if (g.game_active) {

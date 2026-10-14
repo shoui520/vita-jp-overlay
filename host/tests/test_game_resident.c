@@ -86,6 +86,12 @@ int sceKernelFreeMemBlock(SceUID uid)
 }
 SceUID sceKernelCreateThread(const char *n, int (*entry)(SceSize, void *), int p, unsigned stack, unsigned a, int cpu, void *opt) { return 20; }
 int sceKernelStartThread(SceUID uid, SceSize size, void *args) { return 0; }
+
+/* ocr-speed (API 21): the thread run time and the ARM clock; see test_game_vocr.c for the tested ones. */
+int sceKernelGetThreadInfo(SceUID thid, SceKernelThreadInfo *info) { (void)thid; (void)info; return -1; }
+SceUID sceKernelGetThreadId(void) { return 21; }
+int scePowerGetArmClockFrequency(void) { return 333; }
+int scePowerSetArmClockFrequency(int mhz) { (void)mhz; return 0; }
 int sceKernelWaitThreadEnd(SceUID uid, int *status, void *timeout) { return 0; }
 int sceKernelDeleteThread(SceUID uid) { return 0; }
 int sceKernelDelayThread(unsigned us)

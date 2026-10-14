@@ -746,6 +746,11 @@ LOG = {
     # API 20, include/vjo_game_ocr.h: the stable-text wait (rc 1 held, 2 limit reached) and a skipped blank line
     "settle": re.compile(r"^gstep job settle kind=\S+ arg=(\d+) rc=0x([0-9A-Fa-f]+) bytes=(\d+) sum=0x([0-9A-Fa-f]+) .*us=(\d+)"),
     "blank": re.compile(r"^gstep job blank kind=\S+ arg=(\d+) rc=0x([0-9A-Fa-f]+) bytes=(\d+) sum=0x([0-9A-Fa-f]+) .*us=(\d+)"),
+    # API 21 (docs/ocr-speed.md): parallel lines and the line cache, the ARM clock, the game's frame pacing
+    "par": re.compile(r"^gstep job par kind=\S+ arg=(\d+) rc=0x([0-9A-Fa-f]+) bytes=(\d+) sum=0x([0-9A-Fa-f]+) .*us=(\d+)"),
+    "clock": re.compile(r"^gstep job clock kind=\S+ arg=(\d+) rc=0x([0-9A-Fa-f]+) bytes=(\d+) sum=0x([0-9A-Fa-f]+)"),
+    "pace": re.compile(r"^gstep job pace kind=\S+ arg=(\d+) rc=0x([0-9A-Fa-f]+) bytes=(\d+) sum=0x([0-9A-Fa-f]+) "
+                       r"main=(-?\d+) cdram=(-?\d+) phycont=(-?\d+) us=(\d+)"),
 }
 TROUBLE = re.compile(r"fail|refused|error|unusable|timed out|cannot|not loaded|SAFE MODE|not starting|missing at|"
                      r"too large|not opened|unreadable|not writable|unavailable|success=0|reserve guard|not started|"
@@ -770,7 +775,10 @@ def summarise_log(text):
          "anki": {"saves": 0, "save_fail": 0, "queue": None, "sent": 0, "picture_off": 0}, "trouble": {},
          "gstep_fail": {}, "config_warnings": [],
          "settle": {"jobs": 0, "held": 0, "timeout": 0, "none": 0, "ms": [], "passes": [], "changes": 0, "toggling_jobs": 0},
-         "blank": {"lines": 0, "sizes": [], "edges": []}}
+         "blank": {"lines": 0, "sizes": [], "edges": []},
+         "par": {"jobs": 0, "helpers": [], "on_helpers": 0, "cached": 0, "not_started": 0, "share_min": [], "share_mean": []},
+         "clock": {"jobs": 0, "raised": 0, "during": [], "after": [], "before": []},
+         "pace": {"jobs": 0, "max_ms": [], "slow": 0, "frames": 0, "before_max_ms": [], "before_slow": 0, "before_frames": 0}}
     in_blank = False  # the job's BLANK steps follow each other; each carries the job's total in rc
     for raw in text.splitlines():
         line = raw.strip()
@@ -803,6 +811,38 @@ def summarise_log(text):
             in_blank = True
             s["blank"]["sizes"].append(f"{size >> 16}x{size & 0xFFFF}")
             s["blank"]["edges"].append(int(m.group(4), 16) & 0xFFFF)
+            continue
+        m = LOG["par"].match(line)
+        if m:
+            pa, packed = s["par"], int(m.group(4), 16)
+            pa["jobs"] += 1
+            pa["helpers"].append(int(m.group(1)))
+            pa["on_helpers"] += int(m.group(2), 16)
+            pa["not_started"] += packed >> 24
+            pa["cached"] += (packed >> 16) & 0xFF
+            if packed & 0xFF:
+                pa["share_min"].append((packed >> 8) & 0xFF)
+                pa["share_mean"].append(packed & 0xFF)
+            continue
+        m = LOG["clock"].match(line)
+        if m:
+            ck = s["clock"]
+            ck["jobs"] += 1
+            ck["raised"] += int(m.group(2), 16) == 0 and int(m.group(3)) > int(m.group(1))
+            ck["before"].append(int(m.group(1)))
+            ck["during"].append(int(m.group(3)))
+            ck["after"].append(int(m.group(4), 16))
+            continue
+        m = LOG["pace"].match(line)
+        if m:
+            pc = s["pace"]
+            pc["jobs"] += 1
+            pc["frames"] += int(m.group(1))
+            pc["max_ms"].append(int(m.group(2), 16) // 1000)
+            pc["slow"] += int(m.group(4), 16)
+            pc["before_frames"] += int(m.group(8))
+            pc["before_max_ms"].append(int(m.group(6)) // 1000)
+            pc["before_slow"] += int(m.group(7))
             continue
         m = LOG["job"].match(line)
         if m:
@@ -1088,6 +1128,22 @@ def render_collect(c):
         if bl.get("lines"):
             L.append(f"  blank lines skipped: {bl['lines']} ({', '.join(bl['sizes'][:6])}"
                      f"{', ...' if len(bl['sizes']) > 6 else ''}; edges {_span(bl['edges'])} per 10,000)")
+        pa = lg.get("par") or {}
+        if pa.get("jobs"):
+            share = (f"; the recognizing threads' share of a core: lowest {_span(pa['share_min'])}%, mean "
+                     f"{_span(pa['share_mean'])}%" if pa["share_mean"] else "")
+            L.append(f"  parallel lines: {pa['jobs']} job(s) with helpers {_span(pa['helpers'])}; {pa['on_helpers']} "
+                     f"line(s) on a helper, {pa['not_started']} helper(s) did not start, {pa['cached']} line(s) from "
+                     f"the cache{share}")
+        ck = lg.get("clock") or {}
+        if ck.get("jobs"):
+            L.append(f"  ARM clock (ocr_boost_clock): {ck['jobs']} job(s), raised in {ck['raised']}; MHz before "
+                     f"{_span(ck['before'])}, during {_span(ck['during'])}, after {_span(ck['after'])}")
+        pc = lg.get("pace") or {}
+        if pc.get("jobs"):
+            L.append(f"  game frames during OCR jobs: {pc['frames']} in {pc['jobs']} job(s), longest gap "
+                     f"{_span(pc['max_ms'])} ms, {pc['slow']} over 25 ms; between jobs {pc['before_frames']} frames, "
+                     f"longest gap {_span(pc['before_max_ms'])} ms, {pc['before_slow']} over 25 ms")
         if lg["memory"]:
             frees = [m["free"] for m in lg["memory"]]
             heads = [m["headroom"] for m in lg["memory"]]

@@ -719,6 +719,9 @@ static int vocr_run_one(VjoGameOcrResult *result, uint32_t flags, const char *fo
                          (uint32_t)(job_cfg.ocr_settle_max_ms + 25) / 50u << VJO_GAME_OCR_SETTLE_MAX_SHIFT;
         if (!st0.stable) request.flags |= VJO_GAME_OCR_F_SETTLE_FIRST;
     }
+    /* API 21 (ocr-speed): helper threads for parallel lines, the ARM clock. */
+    if (job_cfg.ocr_threads > 1) request.speed |= (uint32_t)(job_cfg.ocr_threads - 1) & VJO_GAME_OCR_S_HELPERS_MASK;
+    if (job_cfg.ocr_boost_clock) request.speed |= VJO_GAME_OCR_S_BOOST;
     vjo_capture_hold(); /* no Lens/Anki capture while the game captures for this job */
     int rc = vjo_game_ocr_exchange(&client, &request, result, vocr_poll_cancelled, NULL, 60000000);
     vjo_capture_release();

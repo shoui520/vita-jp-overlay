@@ -241,7 +241,8 @@ int vjoOcrSubmit(const VjoGameOcrRequest *user_request)
     }
     if (next.size != sizeof(next) || !next.model[0] || next.model[sizeof(next.model)-1] != 0 ||
         !next.model_dir[0] || next.model_dir[sizeof(next.model_dir)-1] != 0 ||
-        next.fallback[sizeof(next.fallback)-1] != 0 || (next.flags & ~VJO_GAME_OCR_F_ALL)) {
+        next.fallback[sizeof(next.fallback)-1] != 0 || (next.flags & ~VJO_GAME_OCR_F_ALL) ||
+        (next.speed & ~VJO_GAME_OCR_S_ALL)) {
         rc = VJO_ERR_ARG; goto out;
     }
     VJO_LOCK();
@@ -287,6 +288,32 @@ out:
     return rc;
 }
 
+/* ocr-speed: the game's frame pacing while an OCR job runs (from its claim,
+ * vjoOcrTake, to its completion) and over the frames since the job before, as
+ * one more step of the job's result (VJO_GSTEP_PACE) when it has room. The
+ * display hook updates it in the game's display call and the worker's syscalls
+ * switch the window, without a lock: a diagnostic (a frame on the switch counts
+ * in either window). */
+typedef struct {
+    uint32_t frames, sum_us, max_us, slow; /* slow: gaps over VJO_PACE_SLOW_US */
+} Pace;
+static Pace pace[2]; /* 0 between jobs, 1 during one */
+static uint32_t pace_last_us; /* the low 32 bits: gaps are differences, wrap included */
+static volatile int pace_job;
+
+void game_ocr_frame(int64_t now_us)
+{
+    Pace *pc = &pace[pace_job & 1];
+    uint32_t now = (uint32_t)now_us, gap = now - pace_last_us;
+    if (pace_last_us) {
+        pc->frames++;
+        pc->sum_us += gap;
+        if (gap > pc->max_us) pc->max_us = gap;
+        if (gap > VJO_PACE_SLOW_US) pc->slow++;
+    }
+    pace_last_us = now ? now : 1u;
+}
+
 int vjoOcrTake(VjoGameOcrRequest *out)
 {
     uint32_t state;
@@ -300,7 +327,7 @@ int vjoOcrTake(VjoGameOcrRequest *out)
     else if (!pending || !valid || cancelled) rc = 1;
     else if (!out || ksceKernelMemcpyKernelToUser(out, &request, sizeof(request)) < 0)
         rc = VJO_ERR_COPY;
-    else { pending = 0; claimed = 1; rc = 0; }
+    else { pending = 0; claimed = 1; rc = 0; pace[1] = (Pace){0}; pace_job = 1; }
     VJO_UNLOCK();
     EXIT_SYSCALL(state);
     return rc;
@@ -568,7 +595,22 @@ int vjoOcrComplete(const VjoGameOcrResult *user_result)
         if (!cancelled) {
             result = incoming;
             completed = 1;
+            if (pace_job && result.n_steps < VJO_GAME_OCR_STEPS) {
+                VjoGameOcrStep *p = &result.step[result.n_steps++];
+                p->id = VJO_GSTEP_PACE;
+                p->kind = 0;
+                p->arg = (uint16_t)(pace[1].frames > 0xFFFFu ? 0xFFFFu : pace[1].frames);
+                p->rc = (int32_t)pace[1].max_us;
+                p->bytes = pace[1].sum_us;
+                p->sum = pace[1].slow;
+                p->us = pace[0].frames;
+                p->free_main = (int32_t)(pace[0].sum_us > 0x7FFFFFFFu ? 0x7FFFFFFFu : pace[0].sum_us);
+                p->free_cdram = (int32_t)pace[0].max_us;
+                p->free_phycont = (int32_t)pace[0].slow;
+            }
         }
+        pace[0] = (Pace){0};
+        pace_job = 0;
         if (!incoming.cleanup_status) claimed = 0;
         /* Failed cleanup retains the claim and may be retried. Completed
          * cancellation drains the reader but never republishes stale text. */

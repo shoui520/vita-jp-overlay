@@ -77,34 +77,66 @@ const VjoVocrModel *vjo_vocr_model(const char *name)
     return NULL;
 }
 
-/* Job workspace: [finder, then recognizer arena | vocr_model, vocr_ctx]. The
- * one-shot form puts the weights in front of it. The region's pixels are not in
- * it: they live one strip at a time in the capture block. */
+/* Job workspace: [finder, then recognizer arena | vocr_model, vocr_ctx], and with
+ * helpers (VjoVocrPool) [the caller's line text | per helper: arena, vocr_ctx,
+ * line pixels, line text]. The one-shot form puts the weights in front of it.
+ * The region's pixels are not in it: they live one strip at a time in the
+ * capture block. */
 typedef struct {
     size_t scratch_off, structs_off, total;
     size_t scratch, finder;
+    unsigned helpers;        /* helper slots laid out */
+    size_t text0_off, helper_off, helper_bytes;
 } Layout;
+
+/* A helper's part of the workspace: [arena | vocr_ctx | pixels | text]. */
+#define H_ARENA(m) ALIGN16((size_t)(m)->arena_bytes)
+#define H_CTX ALIGN16(sizeof(vocr_ctx))
+#define H_PIXELS ALIGN16((size_t)VJO_VOCR_STRIP_BYTES)
+#define H_TEXT ALIGN16((size_t)VJO_OCR_TEXT_CAP)
 
 static int region_ok(unsigned w, unsigned h)
 {
     return w && h && w <= VJO_OCR_MAX_WIDTH && h <= VJO_OCR_MAX_HEIGHT;
 }
 
-static int layout(const VjoVocrModel *m, unsigned w, unsigned h, Layout *l)
+static int layout_helpers(const VjoVocrModel *m, unsigned w, unsigned h, unsigned helpers, Layout *l)
 {
-    if (!m || !region_ok(w, h)) return -1;
+    if (!m || !region_ok(w, h) || helpers > VJO_VOCR_HELPERS_MAX) return -1;
     l->finder = vocr_lines_arena_bytes(w, h);
     l->scratch = ALIGN16(l->finder > m->arena_bytes ? l->finder : m->arena_bytes);
     l->scratch_off = 0;
     l->structs_off = l->scratch;
     l->total = l->structs_off + ALIGN16(sizeof(vocr_model)) + ALIGN16(sizeof(vocr_ctx));
+    l->helpers = helpers;
+    l->helper_bytes = H_ARENA(m) + H_CTX + H_PIXELS + H_TEXT;
+    l->text0_off = l->total;
+    l->helper_off = l->text0_off + H_TEXT;
+    if (helpers) l->total = l->helper_off + (size_t)helpers * l->helper_bytes;
     return 0;
+}
+
+static int layout(const VjoVocrModel *m, unsigned w, unsigned h, Layout *l)
+{
+    return layout_helpers(m, w, h, 0, l);
 }
 
 size_t vjo_vocr_job_bytes(const char *model, unsigned width, unsigned height)
 {
     Layout l;
     return layout(vjo_vocr_model(model), width, height, &l) < 0 ? 0 : l.total;
+}
+
+size_t vjo_vocr_helper_bytes(const char *model)
+{
+    const VjoVocrModel *m = vjo_vocr_model(model);
+    return m ? H_ARENA(m) + H_CTX + H_PIXELS + H_TEXT : 0;
+}
+
+size_t vjo_vocr_job_bytes_helpers(const char *model, unsigned width, unsigned height, unsigned helpers)
+{
+    Layout l;
+    return layout_helpers(vjo_vocr_model(model), width, height, helpers, &l) < 0 ? 0 : l.total;
 }
 
 size_t vjo_vocr_workspace_bytes(const char *model, unsigned width, unsigned height)
@@ -566,7 +598,8 @@ static const unsigned char *line_pixels(Stream *s, const VocrLine *ln, size_t *s
 /* The weights resident and verified, the runtime's model parsed and its arena
  * planned in the scratch (the finder is done with it). */
 static int load_model(const VjoPlatform *p, const char *dir, const VjoVocrModel *mi, const VjoGreySource *im,
-                      VjoVocrResident *res, unsigned char *ws, const Layout *l, VjoVocrStats *st)
+                      VjoVocrResident *res, unsigned char *ws, const Layout *l, VjoVocrStats *st,
+                      VjoVocrCache *cache)
 {
     vocr_model *model = (vocr_model *)(void *)(ws + l->structs_off);
     vocr_ctx *ctx = (vocr_ctx *)(void *)(ws + l->structs_off + ALIGN16(sizeof(vocr_model)));
@@ -574,6 +607,9 @@ static int load_model(const VjoPlatform *p, const char *dir, const VjoVocrModel 
     uint32_t t0 = clock_us(p);
     int rc = resident_weights(p, dir, mi, res, im, st);
     if (rc) return rc;
+    /* Weights read from the file again (another file, or the first job): no
+     * earlier line's text is known to be theirs. */
+    if (st->model_loaded && cache) memset(cache, 0, sizeof(*cache));
     /* Verified bytes the runtime refuses would fail every job: release them. */
     if (vocr_load(model, res->data, mi->bytes) != VOCR_OK) return drop_with(res, VJO_E_OCR_MODEL);
     memset(&opts, 0, sizeof(opts));
@@ -587,6 +623,250 @@ static int load_model(const VjoPlatform *p, const char *dir, const VjoVocrModel 
     return VJO_OK;
 }
 
+/* ---- ocr-speed: the line cache ---- */
+
+/* 64-bit FNV-1a of a crop's rows, then its width, height, polarity and the job's
+ * cache variant. Never 0 (an empty cache entry). */
+static uint64_t line_key(const unsigned char *px, size_t stride, unsigned w, unsigned h, unsigned dark,
+                         uint32_t variant)
+{
+    const uint64_t prime = 0x100000001b3ull;
+    uint64_t k = 0xcbf29ce484222325ull;
+    const uint32_t tail[4] = {w, h, dark, variant};
+    for (unsigned y = 0; y < h; y++) {
+        const unsigned char *r = px + (size_t)y * stride;
+        for (unsigned x = 0; x < w; x++) {
+            k ^= r[x];
+            k *= prime;
+        }
+    }
+    for (unsigned i = 0; i < sizeof(tail); i++) {
+        k ^= ((const unsigned char *)tail)[i];
+        k *= prime;
+    }
+    return k ? k : 1u;
+}
+
+static VjoVocrCacheLine *cache_find(VjoVocrCache *c, const VjoVocrModel *m, uint64_t key)
+{
+    for (unsigned i = 0; i < VJO_VOCR_CACHE_LINES; i++)
+        if (c->line[i].key == key && c->line[i].model == m) return &c->line[i];
+    return NULL;
+}
+
+static void cache_put(VjoVocrCache *c, const VjoVocrModel *m, uint64_t key, const char *text, size_t len,
+                      unsigned frames, uint16_t line_flags)
+{
+    VjoVocrCacheLine *e = cache_find(c, m, key);
+    if (len >= VJO_VOCR_CACHE_TEXT) return;
+    if (!e) {
+        e = &c->line[0];
+        for (unsigned i = 1; i < VJO_VOCR_CACHE_LINES; i++)
+            if (!c->line[i].key || (e->key && c->line[i].used < e->used)) e = &c->line[i];
+    }
+    e->key = key;
+    e->model = m;
+    e->used = ++c->tick;
+    e->frames = (uint16_t)(frames > 0xFFFFu ? 0xFFFFu : frames);
+    e->len = (uint16_t)len;
+    e->line_flags = line_flags;
+    memcpy(e->text, text, len);
+    e->text[len] = '\0';
+}
+
+/* ---- ocr-speed: the slots that recognize lines ---- */
+
+/* Slot 0 is the caller's thread (the job's context in the scratch); slots
+ * 1..helpers run on helper threads, each with its own arena and context over
+ * the shared model, and a copy of its line's pixels. */
+typedef struct {
+    vocr_ctx *ctx;
+    unsigned char *arena, *pixels;
+    char *text;                 /* VJO_OCR_TEXT_CAP bytes */
+    int inited;                 /* vocr_init done on ctx */
+    int busy;                   /* holds a line not yet in the text */
+    int running;                /* a helper thread was started for it: join before reuse */
+    int done;                   /* (atomic) the run returned */
+    int rc;
+    uint32_t us, cpu_us;
+    vocr_image img;
+    vocr_extra extra;
+    /* A helper reads nothing on the caller's stack (it may outlive a failed join):
+     * the callbacks it needs are copied here. */
+    const VjoVocrPool *pool;    /* the caller's thread only */
+    uint64_t (*now_us)(void *ud);
+    void *now_ud;
+    uint64_t (*thread_us)(void *ud);
+    void *thread_ud;
+    const VjoGreySource *im;
+    const int *abort;           /* the job stops: helpers end at their next tile */
+} Slot;
+
+/* The job's abort flag first: once the job has stopped it, a helper that is
+ * still running (a failed join) never reads the caller's image again. */
+static int slot_cancel(void *user)
+{
+    const Slot *sl = (const Slot *)user;
+    return __atomic_load_n(sl->abort, __ATOMIC_ACQUIRE) || cancelled(sl->im);
+}
+
+static uint32_t slot_clock(const Slot *sl)
+{
+    return sl->now_us ? (uint32_t)sl->now_us(sl->now_ud) : 0;
+}
+
+static void slot_run(void *arg)
+{
+    Slot *sl = (Slot *)arg;
+    uint32_t t0 = slot_clock(sl);
+    uint64_t c0 = sl->thread_us ? sl->thread_us(sl->thread_ud) : 0;
+    sl->rc = vocr_run(sl->ctx, &sl->img, sl->text, VJO_OCR_TEXT_CAP, &sl->extra);
+    sl->us = slot_clock(sl) - t0;
+    sl->cpu_us = sl->thread_us ? (uint32_t)(sl->thread_us(sl->thread_ud) - c0) : 0;
+    __atomic_store_n(&sl->done, 1, __ATOMIC_RELEASE);
+}
+
+/* A line between its fetch and its place in the text, in line order. */
+enum { LN_SKIP, LN_HIT, LN_SLOT };
+typedef struct {
+    int kind;
+    unsigned slot;              /* LN_SLOT */
+    const VjoVocrCacheLine *hit;
+    uint64_t key;               /* 0: not cached (no cache, or a tall line) */
+    uint16_t w, h;
+} Pending;
+
+typedef struct {
+    const VjoPlatform *p;
+    const VjoVocrModel *mi;
+    VjoVocrStats *st;
+    VjoVocrCache *cache;
+    char *text;
+    size_t cap, used;
+    Slot slot[1 + VJO_VOCR_HELPERS_MAX];
+    unsigned helpers;
+    Pending q[VJO_VOCR_MAX_LINES];
+    unsigned qh, qt;
+    struct { uint64_t key; size_t off, len; unsigned frames, stat; } put[VJO_VOCR_MAX_LINES];
+    unsigned n_put;
+    int abort, stuck;
+} Lines;
+
+static void line_stat(Lines *L, const Pending *e, unsigned frames, uint32_t us, uint32_t cpu_us, unsigned slot,
+                      int cached, uint16_t flags)
+{
+    VjoVocrLineStat *ls;
+    if (L->st->recognized >= VJO_VOCR_MAX_LINES) return;
+    ls = &L->st->line[L->st->recognized++];
+    ls->width = e->w;
+    ls->height = e->h;
+    ls->frames = (uint16_t)(frames > 0xFFFFu ? 0xFFFFu : frames);
+    ls->reserved = flags;
+    ls->slot = (uint8_t)slot;
+    ls->cached = (uint8_t)(cached != 0);
+    ls->pad = 0;
+    ls->us = us;
+    ls->cpu_us = cpu_us;
+}
+
+/* Places the line at the head of the queue into the text, exactly as the serial
+ * job does (separators, an empty read, the capacity). Its run is over. */
+static int place(Lines *L)
+{
+    Pending *e = &L->q[L->qh];
+    size_t start = L->used ? L->used + 1 : 0, n = 0;
+    const char *t = NULL;
+    const unsigned stat = L->st->recognized; /* the line's VjoVocrLineStat, if there is room for it */
+    L->qh++;
+    if (start + 1 >= L->cap) return VJO_E_TOO_LARGE;
+    if (e->kind == LN_SKIP) return VJO_OK;
+    if (e->kind == LN_HIT) {
+        t = e->hit->text;
+        n = e->hit->len;
+        line_stat(L, e, e->hit->frames, 0, 0, 0, 1, e->hit->line_flags);
+        L->st->cached++;
+    } else {
+        Slot *sl = &L->slot[e->slot];
+        sl->busy = 0;
+        if (sl->rc != VOCR_OK) return run_error(sl->rc);
+        t = sl->text;
+        n = strlen(t);
+        L->st->frames += sl->extra.frames;
+        line_stat(L, e, sl->extra.frames, sl->us, sl->cpu_us, e->slot, 0, 0);
+    }
+    if (start + n + 1 > L->cap) return VJO_E_TOO_LARGE;
+    if (t != L->text + start) memmove(L->text + start, t, n + 1);
+    if (e->key && L->n_put < VJO_VOCR_MAX_LINES) {
+        L->put[L->n_put].key = e->key;
+        L->put[L->n_put].off = start;
+        L->put[L->n_put].len = n;
+        L->put[L->n_put].frames = e->kind == LN_SLOT ? L->slot[e->slot].extra.frames : 0;
+        L->put[L->n_put].stat = stat < L->st->recognized ? stat : VJO_VOCR_MAX_LINES;
+        L->n_put++;
+    }
+    if (!n) { /* nothing read on this line: no separator either */
+        L->text[L->used] = '\0';
+        return VJO_OK;
+    }
+    if (start) L->text[L->used] = '\n';
+    L->used = start + n;
+    return VJO_OK;
+}
+
+/* Waits for slot k's helper, if one runs it. */
+static int join_slot(Lines *L, unsigned k)
+{
+    Slot *sl = &L->slot[k];
+    if (!sl->running) return VJO_OK;
+    if (sl->pool->join(sl->pool->ud, k) < 0) {
+        L->stuck = 1; /* it may still run in the workspace: never freed under it */
+        return VJO_E_OCR_UNAVAILABLE;
+    }
+    sl->running = 0;
+    return VJO_OK;
+}
+
+/* Places every line at the head whose run is over (wait: also the ones still
+ * running, in order). */
+static int drain(Lines *L, int wait)
+{
+    while (L->qh < L->qt) {
+        Pending *e = &L->q[L->qh];
+        int rc;
+        if (e->kind == LN_SLOT) {
+            Slot *sl = &L->slot[e->slot];
+            if (sl->running && !wait && !__atomic_load_n(&sl->done, __ATOMIC_ACQUIRE)) return VJO_OK;
+            rc = join_slot(L, e->slot);
+            if (rc) return rc;
+        }
+        rc = place(L);
+        if (rc) return rc;
+    }
+    return VJO_OK;
+}
+
+/* Stops the job's helpers and waits for every one: nothing runs in the
+ * workspace afterwards (unless a join fails: L->stuck). */
+static void stop_all(Lines *L)
+{
+    __atomic_store_n(&L->abort, 1, __ATOMIC_RELEASE);
+    for (unsigned k = 1; k <= L->helpers; k++)
+        if (join_slot(L, k)) L->stuck = 1;
+    L->qh = L->qt;
+}
+
+static int slot_init(Slot *sl, const vocr_model *model)
+{
+    vocr_opts opts;
+    if (sl->inited) return VJO_OK;
+    memset(&opts, 0, sizeof(opts));
+    opts.mode = VOCR_MODE_W8I;
+    if (vocr_init(sl->ctx, model, &opts, sl->arena, vocr_arena_bytes(model, &opts)) != VOCR_OK)
+        return VJO_E_OCR_INFERENCE;
+    sl->inited = 1;
+    return VJO_OK;
+}
+
 /* One capture of the region: lines, then (weights) each line recognized. */
 static int recognize(const VjoPlatform *p, const char *dir, const VjoVocrModel *mi,
                      const VjoGreySource *im, VjoVocrResident *res, unsigned char *ws, const Layout *l,
@@ -594,16 +874,20 @@ static int recognize(const VjoPlatform *p, const char *dir, const VjoVocrModel *
 {
     const unsigned w = im->width;
     const VjoVocrPolicy *pol = s->pol;
+    const VjoVocrPool *pool = pol->pool;
     VocrLinesRows region = {w, im->height, VOCR_LINES_GREY, stream_row, s};
     VocrLineSet set;
+    vocr_model *model = (vocr_model *)(void *)(ws + l->structs_off);
     vocr_ctx *ctx = (vocr_ctx *)(void *)(ws + l->structs_off + ALIGN16(sizeof(vocr_model)));
-    size_t used = 0;
+    static Lines lines; /* ~2 KB: never on the worker's stack. One job at a time. */
+    Lines *L = &lines;
     uint32_t t0;
-    int rc, loaded = 0;
+    int rc, loaded = 0, busy_on = 0;
 
     text[0] = '\0';
     st->lines = st->truncated = st->dark = st->frames = st->recognized = 0;
     st->blank = 0;
+    st->cached = st->dispatched = st->run_failures = 0;
     t0 = clock_us(p);
     rc = vocr_find_lines_rows(&region, (int)mi->finder_mode, ws + l->scratch_off, l->finder, &set);
     if (rc == VOCR_LINES_E_SOURCE) return stream_error(s, VJO_E_SOURCE);
@@ -622,10 +906,44 @@ static int recognize(const VjoPlatform *p, const char *dir, const VjoVocrModel *
     /* Nothing is recognized before the rows have held still for settle_us. */
     if (settle_on(s) && settle_verify(s) < 0) return stream_error(s, VJO_E_SOURCE);
 
+    memset(L, 0, sizeof(*L));
+    L->p = p;
+    L->mi = mi;
+    L->st = st;
+    L->cache = pol->cache;
+    L->text = text;
+    L->cap = cap;
+    /* Helpers only without a per-line callback (it reads the strip in line order)
+     * and for a text the slots can hold. */
+    L->helpers = pool && pool->run && pool->join && !pol->line && cap <= VJO_OCR_TEXT_CAP
+                 ? (pool->helpers < l->helpers ? pool->helpers : l->helpers) : 0;
+    st->helpers = L->helpers;
+    for (unsigned k = 0; k <= L->helpers; k++) {
+        Slot *sl = &L->slot[k];
+        sl->now_us = p->now_us;
+        sl->now_ud = p->ud;
+        sl->pool = pool;
+        sl->thread_us = pool ? pool->thread_us : NULL;
+        sl->thread_ud = pool ? pool->ud : NULL;
+        sl->im = im;
+        sl->abort = &L->abort;
+        if (!k) {
+            sl->ctx = ctx;
+            sl->text = (char *)(ws + l->text0_off); /* only with helpers */
+            sl->inited = 1; /* load_model plans ctx */
+        } else {
+            unsigned char *b = ws + l->helper_off + (size_t)(k - 1) * l->helper_bytes;
+            sl->arena = b;
+            sl->ctx = (vocr_ctx *)(void *)(b + H_ARENA(mi));
+            sl->pixels = b + H_ARENA(mi) + H_CTX;
+            sl->text = (char *)(b + H_ARENA(mi) + H_CTX + H_PIXELS);
+        }
+    }
+
     /* With the blank-line check, the weights are read at the first line that
      * is not skipped: a box of blank lines opens no model file. */
     if (!pol->blank) {
-        rc = load_model(p, dir, mi, im, res, ws, l, st);
+        rc = load_model(p, dir, mi, im, res, ws, l, st, L->cache);
         if (rc) return rc;
         loaded = 1;
     }
@@ -635,17 +953,26 @@ static int recognize(const VjoPlatform *p, const char *dir, const VjoVocrModel *
         const VocrLine *ln = &set.lines[i];
         const unsigned char *pixels;
         size_t stride = w;
-        vocr_image img;
-        vocr_extra extra;
         VjoVocrInk ink = {0, 0, 0, 0, 0, 0};
-        size_t start = used ? used + 1 : 0, n;
-        uint32_t line_t0;
+        Pending *e;
+        Slot *sl = NULL;
+        uint64_t key = 0;
         int blank = 0;
-        if (cancelled(im)) return VJO_E_CANCELLED;
-        if (start + 1 >= cap) return VJO_E_TOO_LARGE;
+        if (cancelled(im)) { rc = VJO_E_CANCELLED; goto fail; }
+        /* With nothing queued, the text so far is final: the serial job's check. */
+        if (L->qh == L->qt && (L->used ? L->used + 1 : 0) + 1 >= cap) { rc = VJO_E_TOO_LARGE; goto fail; }
         pixels = line_pixels(s, ln, &stride);
-        if (s->err) return s->err;
-        if (!pixels) continue; /* taller than a strip and no line buffer: left out */
+        if (s->err) { rc = s->err; goto fail; }
+        e = &L->q[L->qt];
+        memset(e, 0, sizeof(*e));
+        e->w = (uint16_t)ln->w;
+        e->h = (uint16_t)ln->h;
+        e->kind = LN_SKIP;
+        if (!pixels) { /* taller than a strip and no line buffer: left out */
+            L->qt++;
+            if ((rc = drain(L, 0)) != VJO_OK) goto fail;
+            continue;
+        }
         if (pol->blank || pol->line) {
             uint32_t b0 = clock_us(p);
             blank = vjo_vocr_ink(pixels, stride, ln->w, ln->h, &ink);
@@ -668,49 +995,144 @@ static int recognize(const VjoPlatform *p, const char *dir, const VjoVocrModel *
                 VjoVocrLineInfo info = {i, ln->x, ln->y, ln->w, ln->h, ln->dark, pixels, stride, ink, 1, "", 0};
                 pol->line(pol->ud, &info);
             }
+            L->qt++;
+            if ((rc = drain(L, 0)) != VJO_OK) goto fail;
             continue;
         }
         if (!loaded) {
             uint32_t r0 = clock_us(p);
-            rc = load_model(p, dir, mi, im, res, ws, l, st);
-            if (rc) return rc;
+            rc = load_model(p, dir, mi, im, res, ws, l, st, L->cache);
+            if (rc) goto fail;
             loaded = 1;
             t0 += clock_us(p) - r0; /* recognize_us leaves the load out */
         }
-        img.pixels = pixels;
-        img.width = ln->w;
-        img.height = ln->h;
-        img.stride = stride;
-        img.format = VOCR_GREY8 | (ln->dark ? VOCR_INVERT : 0);
-        memset(&extra, 0, sizeof(extra));
-        extra.cancel = run_cancel;
-        extra.user = (void *)im;
-        line_t0 = clock_us(p);
-        rc = vocr_run(ctx, &img, text + start, cap - start, &extra);
-        if (rc != VOCR_OK) return run_error(rc);
-        st->frames += extra.frames;
-        if (st->recognized < VJO_VOCR_MAX_LINES) {
-            VjoVocrLineStat *ls = &st->line[st->recognized++];
-            ls->width = (uint16_t)ln->w;
-            ls->height = (uint16_t)ln->h;
-            ls->frames = (uint16_t)(extra.frames > 0xFFFFu ? 0xFFFFu : extra.frames);
-            ls->us = clock_us(p) - line_t0;
+        if (L->cache && ln->h <= s->strip_rows) {
+            uint32_t k0 = clock_us(p);
+            const VjoVocrCacheLine *hit;
+            key = line_key(pixels, stride, ln->w, ln->h, ln->dark, pol->cache_variant);
+            st->key_us += clock_us(p) - k0;
+            hit = cache_find(L->cache, mi, key);
+            if (hit) {
+                ((VjoVocrCacheLine *)hit)->used = ++L->cache->tick;
+                e->kind = LN_HIT;
+                e->hit = hit;
+                e->key = 0; /* already there */
+                L->cache->hits++;
+                if (pol->line) {
+                    VjoVocrLineInfo info = {i, ln->x, ln->y, ln->w, ln->h, ln->dark, pixels, stride, ink, 0,
+                                            hit->text, 0};
+                    pol->line(pol->ud, &info);
+                }
+                L->qt++;
+                if ((rc = drain(L, 0)) != VJO_OK) goto fail;
+                continue;
+            }
+            L->cache->misses++;
         }
-        if (pol->line) {
-            VjoVocrLineInfo info = {i, ln->x, ln->y, ln->w, ln->h, ln->dark, pixels, stride, ink, 0,
-                                    text + start, clock_us(p) - line_t0};
-            pol->line(pol->ud, &info);
+        e->kind = LN_SLOT;
+        e->key = key;
+        if (!busy_on && pol->busy) {
+            pol->busy(pol->busy_ud, 1);
+            busy_on = 1;
         }
-        n = strlen(text + start);
-        if (!n) { /* nothing read on this line: no separator either */
-            text[used] = '\0';
+        /* A helper, when one is free and the line fits its copy; else this thread.
+         * The last line always runs here: this thread would only wait otherwise. */
+        if (L->helpers && i + 1 < set.count && (size_t)ln->w * ln->h <= VJO_VOCR_STRIP_BYTES) {
+            if ((rc = drain(L, 0)) != VJO_OK) goto fail; /* lines that are done free their helpers */
+            for (unsigned k = 1; k <= L->helpers && !sl; k++)
+                if (!L->slot[k].busy) sl = &L->slot[k];
+        }
+        if (sl) {
+            unsigned k = (unsigned)(sl - L->slot);
+            if ((rc = slot_init(sl, model)) != VJO_OK) goto fail;
+            for (unsigned r = 0; r < ln->h; r++)
+                memcpy(sl->pixels + (size_t)r * ln->w, pixels + (size_t)r * stride, ln->w);
+            sl->img.pixels = sl->pixels;
+            sl->img.width = ln->w;
+            sl->img.height = ln->h;
+            sl->img.stride = ln->w;
+            sl->img.format = VOCR_GREY8 | (ln->dark ? VOCR_INVERT : 0);
+            memset(&sl->extra, 0, sizeof(sl->extra));
+            sl->extra.cancel = slot_cancel;
+            sl->extra.user = sl;
+            sl->busy = 1;
+            __atomic_store_n(&sl->done, 0, __ATOMIC_RELEASE);
+            e->slot = k;
+            L->qt++;
+            if (pool->run(pool->ud, k, slot_run, sl) == 0) {
+                sl->running = 1;
+                st->dispatched++;
+            } else {
+                st->run_failures++;
+                slot_run(sl); /* no thread: here, now */
+            }
+            if ((rc = drain(L, 0)) != VJO_OK) goto fail;
             continue;
         }
-        if (start) text[used] = '\n';
-        used = start + n;
+        /* Here, on the caller's thread: straight into the text when nothing is
+         * queued before it (the serial job), else into slot 0's text, once
+         * slot 0 holds nothing still waiting. */
+        if (L->qh < L->qt && L->slot[0].busy && (rc = drain(L, 1)) != VJO_OK) goto fail;
+        sl = &L->slot[0];
+        {
+            size_t start = L->used ? L->used + 1 : 0;
+            int direct = L->qh == L->qt;
+            uint32_t line_t0 = clock_us(p);
+            uint64_t c0 = pool && pool->thread_us ? pool->thread_us(pool->ud) : 0;
+            vocr_image img;
+            img.pixels = pixels;
+            img.width = ln->w;
+            img.height = ln->h;
+            img.stride = stride;
+            img.format = VOCR_GREY8 | (ln->dark ? VOCR_INVERT : 0);
+            memset(&sl->extra, 0, sizeof(sl->extra));
+            sl->extra.cancel = run_cancel;
+            sl->extra.user = (void *)im;
+            if (direct) {
+                rc = vocr_run(ctx, &img, text + start, cap - start, &sl->extra);
+                if (rc != VOCR_OK) { rc = run_error(rc); goto fail; }
+            } else {
+                sl->rc = vocr_run(ctx, &img, sl->text, VJO_OCR_TEXT_CAP, &sl->extra);
+                sl->busy = 1;
+            }
+            sl->us = clock_us(p) - line_t0;
+            sl->cpu_us = pool && pool->thread_us ? (uint32_t)(pool->thread_us(pool->ud) - c0) : 0;
+            sl->rc = direct ? VOCR_OK : sl->rc;
+            if (direct) {
+                char *saved = sl->text;
+                sl->text = text + start; /* place() reads the line where it already is */
+                e->slot = 0;
+                L->qt++;
+                rc = place(L);
+                sl->text = saved;
+                if (rc) goto fail;
+                if (pol->line) {
+                    VjoVocrLineInfo info = {i, ln->x, ln->y, ln->w, ln->h, ln->dark, pixels, stride, ink, 0,
+                                            text + start, sl->us};
+                    pol->line(pol->ud, &info);
+                }
+            } else {
+                e->slot = 0;
+                L->qt++;
+            }
+        }
+        if ((rc = drain(L, 0)) != VJO_OK) goto fail;
     }
+    rc = drain(L, 1);
+    if (rc) goto fail;
+    if (busy_on) pol->busy(pol->busy_ud, 0);
     st->recognize_us = clock_us(p) - t0;
+    /* The job succeeded: its recognized lines become known texts. */
+    if (L->cache)
+        for (unsigned k = 0; k < L->n_put; k++)
+            cache_put(L->cache, mi, L->put[k].key, text + L->put[k].off, L->put[k].len, L->put[k].frames,
+                      L->put[k].stat < VJO_VOCR_MAX_LINES ? st->line[L->put[k].stat].reserved : 0u);
     return VJO_OK;
+fail:
+    stop_all(L);
+    if (busy_on) pol->busy(pol->busy_ud, 0);
+    if (L->stuck) st->stuck = 1;
+    return rc;
 }
 
 static const VjoVocrPolicy no_policy;
@@ -735,6 +1157,16 @@ static int run_job(const VjoPlatform *platform, const char *model_dir, const cha
     if (!mi) return VJO_E_OCR_MODEL;
     if (!image->strip || layout(mi, image->width, image->height, &l) < 0) return VJO_E_OCR_REGION;
     front = one_shot ? ALIGN16(mi->bytes) : 0;
+    /* As many of the pool's helpers as the workspace holds (each one's arena,
+     * context, line copy and text: vjo_vocr_helper_bytes). */
+    if (policy && policy->pool && workspace) {
+        unsigned helpers = policy->pool->helpers < VJO_VOCR_HELPERS_MAX ? policy->pool->helpers : VJO_VOCR_HELPERS_MAX;
+        Layout lh;
+        while (helpers && (layout_helpers(mi, image->width, image->height, helpers, &lh) < 0 ||
+                           workspace_size < front + lh.total))
+            helpers--;
+        if (helpers) l = lh;
+    }
     strip_rows = vjo_vocr_strip_rows(image->width, image->height);
     need_capture = vjo_vocr_capture_bytes(image->width, image->height);
     stats->workspace = front + l.total;

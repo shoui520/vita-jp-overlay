@@ -80,11 +80,37 @@ int sceKernelFreeMemBlock(SceUID uid)
     TEST_CHECK(uid == 9 && memory_live); if (free_failure) return -1;
     memory_live = 0; frees++; live_bytes -= job_block; return 0;
 }
+/* API 21: a helper thread (game_ocr/main.c pool_run) runs its line at once, in StartThread. */
+static unsigned helper_threads, helper_live, helper_starts;
+static int helper_create_failure;
 SceUID sceKernelCreateThread(const char *n, int (*entry)(SceSize, void *), int p, unsigned stack, unsigned a, int cpu, void *opt)
-{ TEST_CHECK(stack == 32*1024 && entry == worker_main && p == 0x10000100 + 31 && cpu == 0x70000); thread_creates++; return 20; }
-int sceKernelStartThread(SceUID uid, SceSize size, void *args) { return start_failure ? -1 : 0; }
-int sceKernelWaitThreadEnd(SceUID uid, int *status, void *timeout) { return join_failure ? -1 : 0; }
-int sceKernelDeleteThread(SceUID uid) { return delete_failure ? -1 : 0; }
+{
+    if (entry == helper_entry) {
+        TEST_CHECK(stack == VJO_STACK_GAME_HELPER && p == 0x10000100 + 31 && cpu == 0x70000 && !strcmp(n, "VjoGameVocrHelper"));
+        if (helper_create_failure) return (int)0x80020190u;
+        helper_threads++; helper_live++;
+        return 40 + (int)helper_threads;
+    }
+    TEST_CHECK(stack == 32*1024 && entry == worker_main && p == 0x10000100 + 31 && cpu == 0x70000); thread_creates++; return 20;
+}
+int sceKernelStartThread(SceUID uid, SceSize size, void *args)
+{
+    if (uid > 40) { helper_starts++; return helper_entry(size, args); }
+    return start_failure ? -1 : 0;
+}
+int sceKernelWaitThreadEnd(SceUID uid, int *status, void *timeout) { return uid > 40 ? 0 : join_failure ? -1 : 0; }
+int sceKernelDeleteThread(SceUID uid)
+{
+    if (uid > 40) { TEST_CHECK(helper_live > 0); helper_live--; return 0; }
+    return delete_failure ? -1 : 0;
+}
+int sceKernelGetThreadInfo(SceUID thid, SceKernelThreadInfo *info)
+{ TEST_CHECK(info->size == sizeof(*info)); info->runClocks = clock_value; return 0; }
+SceUID sceKernelGetThreadId(void) { return 20; }
+/* The ARM clock (ocr_boost_clock): what the game runs at, and the calls that set it. */
+static int arm_mhz = 333, arm_sets, arm_set_last;
+int scePowerGetArmClockFrequency(void) { return arm_mhz; }
+int scePowerSetArmClockFrequency(int mhz) { arm_sets++; arm_set_last = mhz; arm_mhz = mhz; return 0; }
 int sceKernelDelayThread(unsigned us) { clock_value += us; return 0; }
 int sceKernelGetProcessTitleId(SceUID pid, char *out, SceSize size)
 { TEST_CHECK(pid == 7); snprintf(out, size, "%s", own_title); return 0; }
@@ -280,6 +306,9 @@ static void cancel_and_wire(void)
     TEST_CHECK(vjo_game_ocr_run_request(&r, &out) == VJO_E_SOURCE && !allocations);
     r.x = 0; r.flags = 0x80;
     TEST_CHECK(vjo_game_ocr_run_request(&r, &out) == VJO_E_SOURCE && !allocations);
+    r.flags = 0; r.speed = 0x8; /* API 21: VJO_GAME_OCR_S_* bits 3-31 unknown */
+    TEST_CHECK(vjo_game_ocr_run_request(&r, &out) == VJO_E_SOURCE && !allocations);
+    r.speed = 0;
     r.flags = 0; r.model[31] = 'x';
     TEST_CHECK(vjo_game_ocr_run_request(&r, &out) == VJO_E_SOURCE && !allocations);
 }
@@ -575,6 +604,72 @@ static void policy_in_the_flags(void)
     TEST_CHECK(vjo_game_ocr_run_request(&r, &out) == VJO_E_SOURCE && !allocations && !out.n_steps);
 }
 
+/* API 21 (ocr-speed): helpers and the ARM clock ride in the flags. Helpers are
+ * counted in the memory check and dropped one at a time when they do not fit;
+ * the clock goes to 444 MHz around the recognition only and back after it. */
+static void helpers_and_clock_in_the_flags(void)
+{
+    VjoGameOcrRequest r = setup(); VjoGameOcrResult out;
+    uint32_t plain_need, extra2 = (uint32_t)helpers_need(r.model, 200, 60, 2);
+    uint32_t extra1 = (uint32_t)helpers_need(r.model, 200, 60, 1);
+    const VjoGameOcrStep *clock = NULL, *par = NULL;
+    line();
+    arm_mhz = 333; arm_sets = 0; helper_threads = helper_live = helper_starts = 0;
+    vjo_game_ocr_run_request(&r, &out);
+    plain_need = out.need_workspace;
+    TEST_CHECK(arm_sets == 0 && plain_need > 0);
+    for (unsigned i = 0; i < out.n_steps; i++) TEST_CHECK(out.step[i].id != VJO_GSTEP_CLOCK && out.step[i].id != VJO_GSTEP_PAR);
+    /* two helpers asked for, room for both: counted, stacks included */
+    TEST_CHECK(extra1 > 2u * VJO_BUDGET_GAME_HELPER_STACK / 2u && extra2 > extra1);
+    r.speed = 2u | VJO_GAME_OCR_S_BOOST;
+    memset(&line_cache, 0, sizeof(line_cache)); /* the plain job's line is cached: recognize it again */
+    int rc = vjo_game_ocr_run_request(&r, &out);
+    TEST_CHECK(!rc || out.rc == VJO_E_OCR_MODEL || !VJO_VOCR_MODEL_DIR[0]);
+    TEST_CHECK(out.need_workspace == plain_need + extra2);
+    TEST_MSG("need %u, without helpers %u, two helpers add %u", (unsigned)out.need_workspace, plain_need, extra2);
+    TEST_CHECK(!memory_live && !capture_live && helper_live == 0);
+    for (unsigned i = 0; i < out.n_steps; i++) {
+        if (out.step[i].id == VJO_GSTEP_CLOCK) clock = &out.step[i];
+        if (out.step[i].id == VJO_GSTEP_PAR) par = &out.step[i];
+    }
+    if (VJO_VOCR_MODEL_DIR[0] && !rc && out.recognized) {
+        /* one line: it runs on the worker's own thread (the last line always does) */
+        TEST_ASSERT(clock != NULL && par != NULL);
+        TEST_CHECK(clock->arg == 333 && clock->bytes == 444 && clock->sum == 333 && clock->rc == 0);
+        TEST_CHECK(arm_sets == 2 && arm_set_last == 333 && arm_mhz == 333);
+        TEST_CHECK(par->arg == 2 && par->rc == 0 && par->bytes == extra2 && helper_threads == 0);
+        TEST_CHECK(((par->sum >> 16) & 0xFFu) == 0); /* no line from the cache */
+        /* already at 444 or more: not raised, not lowered */
+        arm_mhz = 444; arm_sets = 0;
+        resident.model = NULL; /* weights again, so the line is recognized, not cached */
+        memset(&line_cache, 0, sizeof(line_cache));
+        TEST_CHECK(!vjo_game_ocr_run_request(&r, &out));
+        clock = NULL;
+        for (unsigned i = 0; i < out.n_steps; i++) if (out.step[i].id == VJO_GSTEP_CLOCK) clock = &out.step[i];
+        TEST_CHECK(clock && clock->rc == 1 && clock->arg == 444 && arm_sets == 0 && arm_mhz == 444);
+        /* the same screen again: the line comes from the cache, no clock change, no recognizer */
+        arm_mhz = 333; arm_sets = 0;
+        TEST_CHECK(!vjo_game_ocr_run_request(&r, &out));
+        par = NULL;
+        for (unsigned i = 0; i < out.n_steps; i++) if (out.step[i].id == VJO_GSTEP_PAR) par = &out.step[i];
+        TEST_CHECK(arm_sets == 0 && out.frames == 0 && out.recognized == 1 && par && ((par->sum >> 16) & 0xFFu) == 1);
+    }
+    /* free memory for one helper only, then for none: fewer helpers, never a refusal
+     * (the resident weights, if any, are already part of live_bytes) */
+    TEST_ASSERT(resident.model != NULL || !VJO_VOCR_MODEL_DIR[0]); /* weights resident: they need nothing more */
+    available = (int)(live_bytes + VJO_GAME_RESERVE + plain_need + extra1 + 4096u);
+    if (!resident.model) available += (int)PAGE_ROUND(vjo_vocr_model(r.model)->bytes);
+    vjo_game_ocr_run_request(&r, &out);
+    TEST_CHECK(out.need_workspace == plain_need + extra1);
+    TEST_MSG("need %u (plain %u, +1 helper %u, +2 %u)", (unsigned)out.need_workspace, plain_need, extra1, extra2);
+    available = (int)(live_bytes + VJO_GAME_RESERVE + plain_need + 4096u);
+    if (!resident.model) available += (int)PAGE_ROUND(vjo_vocr_model(r.model)->bytes);
+    vjo_game_ocr_run_request(&r, &out);
+    TEST_CHECK(out.need_workspace == plain_need && out.rc != VJO_E_OOM);
+    TEST_MSG("need %u (plain %u, +1 helper %u)", (unsigned)out.need_workspace, plain_need, extra1);
+    arm_mhz = 333;
+}
+
 /* The step log: a retried job logs its first pass and its signature once (the
  * TEAR step counts the tries), and when the log fills up the other steps make
  * room for the release of every block the worker holds, so the FREE steps that
@@ -641,5 +736,6 @@ TEST_LIST = {
     {"the job policy rides in the flags: the wait, its step, unknown bits refused", policy_in_the_flags},
     {"the request's flags become the job's policy", request_flags_become_the_policy},
     {"the step log logs a retried pass once and keeps the releases", step_log_keeps_the_releases},
+    {"API 21: helpers and the ARM clock ride in the flags, counted and restored", helpers_and_clock_in_the_flags},
     {NULL, NULL}
 };

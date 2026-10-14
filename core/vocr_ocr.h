@@ -118,8 +118,13 @@ const VjoVocrModel *vjo_vocr_models(unsigned *count);
 typedef struct {
     uint16_t width, height;  /* crop in region pixels */
     uint16_t frames;         /* CTC frames (the resized width / 8) */
-    uint16_t reserved;
-    uint32_t us;             /* vocr_run time with VjoPlatform.now_us, else 0 */
+    uint16_t reserved;       /* kept by the line cache with the line's text (VjoVocrCache) */
+    uint32_t us;             /* vocr_run time with VjoPlatform.now_us, else 0 (wall time, start to end) */
+    /* ocr-speed */
+    uint8_t slot;            /* who recognized it: 0 the caller's thread, 1.. a helper (VjoVocrPool) */
+    uint8_t cached;          /* 1: its pixels were unchanged since a job read them (VjoVocrCache): no vocr_run */
+    uint16_t pad;
+    uint32_t cpu_us;         /* the recognizing thread's run time for it (VjoVocrPool.thread_us), else 0 */
 } VjoVocrLineStat;
 
 /* A found line's ink (vjo_vocr_ink): its contrast (the 98th minus the 2nd
@@ -195,6 +200,13 @@ typedef struct {
     unsigned blank;          /* lines skipped: no text-like ink in their crop */
     uint32_t blank_us;       /* time spent checking */
     VjoVocrBlankStat blank_line[VJO_VOCR_BLANK_LOGGED]; /* the first ones skipped */
+    /* Parallel lines and the line cache (ocr-speed). */
+    unsigned helpers;        /* helper threads the job could use (VjoVocrPool.helpers, 0 serial) */
+    unsigned dispatched;     /* lines a helper recognized */
+    unsigned run_failures;   /* helpers that could not start: their line ran on the caller's thread */
+    unsigned cached;         /* lines whose text came from the cache */
+    uint32_t key_us;         /* time spent hashing lines for the cache */
+    unsigned stuck;          /* 1: a helper could not be joined: it may still run in the workspace */
 } VjoVocrStats;
 
 /* Each found line, for host tools (VjoVocrPolicy.line): valid during the call. */
@@ -226,6 +238,58 @@ typedef struct {
  * VJO_VOCR_BLANK_EDGES, for tools and tests). sleep, optional: once the region
  * has been re-read without a change, the job sleeps until a re-read can be the
  * last one instead of reading passes that are too early to count. */
+/* Parallel lines (ocr-speed): the lines of a region are independent, so a job
+ * may recognize up to 1 + helpers of them at once, each on its own vocr_ctx and
+ * arena over the one shared, read-only model. The caller's thread keeps all the
+ * rest in line order: each line's fetch from the strip and every row check, the
+ * blank-line check, the cache, the stats and the text; a line handed to a
+ * helper is first copied out of the strip (the next fetch rewrites it), and a
+ * line runs on the caller's thread when no helper is free. The text, the
+ * frames and every line's result are exactly the serial job's: vocr_run is
+ * deterministic and shares nothing but the read-only weights. run(ud, slot,
+ * fn, arg) runs fn(arg) on another thread (slot 1..helpers, at most one at a
+ * time per slot) and returns 0, or < 0 when it cannot (that line then runs on
+ * the caller's thread). join(ud, slot) returns 0 once that fn has returned, or
+ * < 0 when it cannot tell: the job then fails with VJO_E_OCR_UNAVAILABLE and the
+ * workspace must stay allocated (the helper may still be running in it).
+ * thread_us, optional: the calling thread's run time so far in microseconds
+ * (each line's cpu_us). A per-line callback (VjoVocrPolicy.line) keeps the job
+ * serial. The workspace grows by vjo_vocr_helper_bytes() per helper. */
+typedef struct {
+    unsigned helpers;        /* 0..VJO_VOCR_HELPERS_MAX */
+    int (*run)(void *ud, unsigned slot, void (*fn)(void *arg), void *arg);
+    int (*join)(void *ud, unsigned slot);
+    uint64_t (*thread_us)(void *ud);
+    void *ud;
+} VjoVocrPool;
+#define VJO_VOCR_HELPERS_MAX 2u
+
+/* The line cache (ocr-speed): a line whose grey pixels, size, polarity and model
+ * are those of a line recognized before, under the same VjoVocrPolicy.cache_variant,
+ * gets that line's text (and its VjoVocrLineStat.reserved) without running the
+ * recognizer (vocr_run is deterministic, so it is exactly the text it would give).
+ * The key is a 64-bit FNV-1a of the crop's rows, its size, its polarity and the
+ * variant. cache_variant names everything else that decides a line's shown text
+ * (a decoder, a re-reading cascade and their settings): jobs that differ in it
+ * share no entry. Caller-owned, zero-initialized, kept between jobs; entries of
+ * another model never match, and any job that reads the weights from the file
+ * again empties it. A job adds its recognized lines once it has succeeded. */
+#define VJO_VOCR_CACHE_LINES 8u
+#define VJO_VOCR_CACHE_TEXT 368u /* longer line texts are not kept */
+typedef struct {
+    uint64_t key;            /* 0: empty */
+    const VjoVocrModel *model;
+    uint32_t used;           /* the cache's tick when last used (least recently used goes first) */
+    uint16_t frames, len;
+    uint16_t line_flags;     /* the line's VjoVocrLineStat.reserved */
+    uint16_t pad;
+    char text[VJO_VOCR_CACHE_TEXT];
+} VjoVocrCacheLine;
+typedef struct {
+    VjoVocrCacheLine line[VJO_VOCR_CACHE_LINES];
+    uint32_t tick, hits, misses;
+} VjoVocrCache;
+
 typedef struct {
     uint32_t settle_us, settle_max_us;
     int settle_first;
@@ -234,6 +298,16 @@ typedef struct {
     void (*line)(void *ud, const VjoVocrLineInfo *info);
     void *ud;
     void (*sleep)(uint32_t us);
+    /* ocr-speed: NULL / 0 is API 20's serial job. */
+    const VjoVocrPool *pool;
+    VjoVocrCache *cache;
+    uint32_t cache_variant;   /* see VjoVocrCache */
+    /* busy(ud, 1) just before the first line is recognized, busy(ud, 0) once the
+     * last one is (helpers joined); never for a job whose lines all come from the
+     * cache or are skipped. The game worker raises the ARM clock in between, when
+     * the job asks for it (ocr_boost_clock). */
+    void (*busy)(void *ud, int on);
+    void *busy_ud;
 } VjoVocrPolicy;
 #define VJO_VOCR_SETTLE_MAX_US 2000000u
 
@@ -268,6 +342,13 @@ int vjo_vocr_resident_drop(VjoVocrResident *resident);
  * model or region. Neither includes the capture block. */
 size_t vjo_vocr_job_bytes(const char *model, unsigned width, unsigned height);
 size_t vjo_vocr_workspace_bytes(const char *model, unsigned width, unsigned height);
+/* What each helper (VjoVocrPool) adds to a job's workspace with `model`: its
+ * recognizer arena and context, a line's pixels (a line inside a strip is at
+ * most VJO_VOCR_STRIP_BYTES) and its text (VJO_OCR_TEXT_CAP); plus, once per
+ * job with any helper, the caller's own line text (VJO_OCR_TEXT_CAP). 0 for an
+ * unsupported model. vjo_vocr_job_bytes_helpers() is the whole workspace. */
+size_t vjo_vocr_helper_bytes(const char *model);
+size_t vjo_vocr_job_bytes_helpers(const char *model, unsigned width, unsigned height, unsigned helpers);
 /* Rows per strip for a region of this size, and the capture block's exact
  * bytes (0 for an unsupported region), never more than VJO_VOCR_CAPTURE_LIMIT;
  * the recent states it keeps per row. */

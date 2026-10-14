@@ -50,7 +50,7 @@ class MemoryLedgerCheck(unittest.TestCase):
         self.assertIn("memory ledger: pass", result.stdout)
         for pool in ("shell pages", "shell paf", "kernel", "game"):
             self.assertIn(pool, result.stdout)
-        self.assertIn("allocation sites: 8, all in ledger wrappers", result.stdout)
+        self.assertIn("allocation sites: 9, all in ledger wrappers", result.stdout)
         as_json = json.loads(run("--json").stdout)
         self.assertEqual(as_json["result"], "pass")
         self.assertEqual({p["pool"] for p in as_json["pools"]},
