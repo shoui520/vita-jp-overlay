@@ -61,6 +61,12 @@ else, so the text is the serial job's: on the 367 linefind development regions (
 frames; the 5 rows of v1267, reserved as a shared release since vita-vn-ocr #81, are refused) with the
 real VOCR3-H15 weights, serial, 1 helper, 2 helpers and the cache gave **0 different texts** (`host/vocr_parallel_bench.c`, `tools/vocr_regions_pack.py`).
 
+What overlaps: while a helper recognizes line i, the job's thread fetches line i+1 (a strip re-read,
+one display frame, when the line is not in the strip it holds) and hands it on. What does not: the
+finder (67-136 ms per textbox on test.1, mostly strip waits at one display frame each) still runs before
+the first line, because it needs the whole region to separate the lines; hiding it needs a finder that
+reports lines while it reads (vita-vn-ocr's `vocr_find_lines_rows`), which this PR does not change.
+
 In the game (`game_ocr/main.c`) each helper is a thread created for its line and deleted once the line
 is placed (`VjoGameVocrHelper`, 16 KiB stack, the worker's priority and cores), so no thread or stack
 outlives a job. A thread that cannot be created runs its line on the worker's thread. The job's memory
