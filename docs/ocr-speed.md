@@ -24,7 +24,11 @@ the recognition 2-3 times faster in four steps; every one keeps the text exactly
 | the same box again | 1.22 s | 0 (cache), plus about 1-2 ms of hashing (estimate) | same | host: 0 recognitions on the 2nd pass of 367 regions |
 
 How many cores a game leaves to the overlay is unmeasured; the lines run at the lowest user priority,
-so every game thread preempts them. This build logs it (below), per line and per job.
+so every game thread preempts them. What test.1 does show: the worker's wall time per frame stayed within
+4,941-5,238 µs over 13 CLANNAD jobs (±3%) and equals the cycle model's high bound for the code with no
+preemption (×1.03), so CLANNAD left at least one core almost entirely to the worker (an inference from
+the log, not a CPU reading). Whether a second and a third core are free is what this build logs, per
+line and per job (below).
 
 ## What the log shows (API 21)
 
