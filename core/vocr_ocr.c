@@ -855,14 +855,19 @@ static void stop_all(Lines *L)
     L->qh = L->qt;
 }
 
-static int slot_init(Slot *sl, const vocr_model *model)
+/* A helper's context over the shared model, planned in its own arena of `avail`
+ * bytes (the pinned arena, H_ARENA): a plan that needs more is refused, as
+ * load_model refuses it for the job's own context. */
+static int slot_init(Slot *sl, const vocr_model *model, size_t avail)
 {
     vocr_opts opts;
+    size_t need;
     if (sl->inited) return VJO_OK;
     memset(&opts, 0, sizeof(opts));
     opts.mode = VOCR_MODE_W8I;
-    if (vocr_init(sl->ctx, model, &opts, sl->arena, vocr_arena_bytes(model, &opts)) != VOCR_OK)
-        return VJO_E_OCR_INFERENCE;
+    need = vocr_arena_bytes(model, &opts);
+    if (!need || need > avail) return VJO_E_OCR_MODEL;
+    if (vocr_init(sl->ctx, model, &opts, sl->arena, avail) != VOCR_OK) return VJO_E_OCR_INFERENCE;
     sl->inited = 1;
     return VJO_OK;
 }
@@ -1044,7 +1049,7 @@ static int recognize(const VjoPlatform *p, const char *dir, const VjoVocrModel *
         }
         if (sl) {
             unsigned k = (unsigned)(sl - L->slot);
-            if ((rc = slot_init(sl, model)) != VJO_OK) goto fail;
+            if ((rc = slot_init(sl, model, H_ARENA(mi))) != VJO_OK) goto fail;
             for (unsigned r = 0; r < ln->h; r++)
                 memcpy(sl->pixels + (size_t)r * ln->w, pixels + (size_t)r * stride, ln->w);
             sl->img.pixels = sl->pixels;

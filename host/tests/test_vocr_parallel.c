@@ -484,6 +484,20 @@ static void test_sizes_and_fewer_helpers(void)
     TEST_CHECK(r.rc == VJO_OK && r.st.helpers == 1 && r.st.workspace == h1);
     run_job(&r, &pl, 2, NULL, h1 - 1);
     TEST_CHECK(r.rc == VJO_OK && r.st.helpers == 0 && r.st.dispatched == 0);
+    /* A pinned arena smaller than the plan: a helper refuses its context (no overrun) */
+    {
+        const VjoVocrModel *m = vjo_vocr_model("TINY_w8.vocr");
+        uint32_t arena = m->arena_bytes;
+        unsigned char sha[32];
+        memcpy(sha, m->sha256, 32);
+        test_pin_model(m->bytes, sha, arena - 64u);
+        run_job(&r, &pl, 2, NULL, 0);
+        TEST_CHECK(r.rc == VJO_E_OCR_MODEL || (r.rc == VJO_OK && r.st.dispatched == 0));
+        TEST_MSG("rc %d, dispatched %u", r.rc, r.st.dispatched);
+        test_pin_model(m->bytes, sha, arena);
+        run_job(&r, &pl, 2, NULL, 0);
+        TEST_CHECK(r.rc == VJO_OK && r.st.dispatched > 0);
+    }
     pthread_mutex_destroy(&pl.mu);
 }
 
