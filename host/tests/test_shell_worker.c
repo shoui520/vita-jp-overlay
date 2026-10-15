@@ -2486,6 +2486,7 @@ static void test_ledger_counts_result_memory_against_the_budget(void)
     loaded.dictionary = VJO_DICT_LOCAL; loaded.ocr_backend = VJO_OCR_VOCR;
     cfg = loaded;
     vjo_ledger_shell_log("test");
+    TEST_CHECK(!open_batch); /* the ledger table's batch is closed: no pointer into this stack frame */
 }
 
 /* The self-test, while armed, runs OCR automatically whatever config.ini says,

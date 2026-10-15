@@ -99,14 +99,15 @@ line, under `render`'s 312 B, so the overlay's deepest frame is unchanged [measu
 Writing a job's log lines together (`shell/log_vita.c` `vjo_log_batch_begin`/`end`: the result's
 lines, the recognized text's, the ledger table's) takes no allocation and no item: each batch's
 buffer is on the stack of the thread that logs it, for the burst only. On VjoNet's 64 KiB stack
-(sized for BearSSL's TLS, which `vocr_run_one` never runs) `vocr_run_one`'s frame grows from 840
-to 5,000 B (its 4 KiB buffer) and `log_text_lines`' is 1,864 B (1.5 KiB); the deepest chain of the
-Shell's own code on that thread goes from 1,648 to 5,760 B. On VjoControl's 16 KiB stack
-`vjo_ledger_shell_log`'s frame grows from 32 to 1,128 B (a 1 KiB buffer) on a chain of 1,960 B; the
-thread's deepest chain of Shell code stays the config reload's, 3,160 B before and 3,248 B after
-(the flush adds 88 B under `vjo_log`) [measured: `arm-vita-eabi-gcc -fstack-usage
--fcallgraph-info=su` with the Shell's flags, main `bcb780e` and this change; chains of the
-Shell's own files, the SDK's calls counted as 0]. The logger's code grows the Shell's text from
+(sized for BearSSL's TLS, which `vocr_run_one` never runs) `vocr_run_one`'s frame grows from 832
+to 4,992 B (its 4 KiB buffer) and `log_text_lines`' is 1,840 B (1.5 KiB); the deepest chain of the
+Shell's own code on that thread goes from 1,544 to 5,672 B. On VjoControl's 16 KiB stack
+`vjo_ledger_shell_log`'s frame grows from 32 to 1,128 B (a 1 KiB buffer), its chain from 424 to
+1,592 B; the thread's deepest chain of Shell code stays the config reload's, 3,128 B before and
+3,200 B after (the flush adds 72 B under `vjo_log`) [measured: `arm-vita-eabi-gcc -fstack-usage
+-fcallgraph-info=su` with each file's own flags (`-Os` for these), main `e90a43d` and `72292e1`;
+chains of the Shell's own files, the SDK's calls counted as 0; #100 first quoted the same
+measurement at `-O2`]. The logger's code grows the Shell's text from
 215,256 to 215,952 B and its data from 77,984 to 77,988 B (the open batch's pointer): the module
 stays at 299,008 B [measured: the build log's module row].
 

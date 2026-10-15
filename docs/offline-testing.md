@@ -47,11 +47,11 @@ uses) and runs them with `qemu-arm -cpu cortex-a9`:
 | region_select | 14 | the region selector's stick cursor (`core/region_select.c`): its 1/256-pixel position, speed and timer arithmetic in 32 bits |
 | text_rows | 11 | the overlay arrows' row walk (`core/text_rows.c`, #81): float cell edges and 32-bit offsets on the Vita's FPU |
 | settings_layout | 12 | the Overlay app's text layouts, icon PNG check and title letters (`settings/text_layout.c`, `settings/icons.c`, `settings/letter.c`): 32-bit `size_t` in the chunk walk, chunk lengths that would wrap it, each check against an unmapped page |
-| shell_log | 10 | the Shell's logger (`shell/log_vita.c`) on an in-memory file system: a batch of lines gives the files the same bytes as line by line through `status.txt`'s 64 KiB cap and `log.txt`'s 1 MiB rotation, with 32-bit sizes |
+| shell_log | 11 | the Shell's logger (`shell/log_vita.c`) on an in-memory file system: a batch of lines gives the files the same bytes as line by line through `status.txt`'s 64 KiB cap and `log.txt`'s 1 MiB rotation, with 32-bit sizes |
 | capture_parity | 2 | with `VJO_VOCR_SOURCE_DIR`: API 18's and API 19's capture give the recognizer identical bytes on the Vita's CPU (procedural frames; `tools/capture_parity.py` adds the eval crops) |
 | word_lookup | 1,321 lookups | with `VJO_PLAINTEXT_DIR`: `core/local_dict.c` with the bundled dictionary at every Japanese letter of the real VOCR lines in `host/fixtures/word_lookup` gives output identical to the host build's (entries, spans, definitions; `host/tests/word_lookup_parity.c`) |
 
-Measured on the fleet box (Arm GNU Toolchain 14.2.Rel1, qemu-arm 10.0.13): all 132 cases pass,
+Measured on the fleet box (Arm GNU Toolchain 14.2.Rel1, qemu-arm 10.0.13): all 133 cases pass,
 and the eval-crop parity (372 regions × 3 formats) has no difference there either.
 In CI it is the `arm` step of the host job (`gcc-arm-linux-gnueabihf`, `qemu-user-static`). It
 is not a Vita: no firmware, no taiHEN, no SceShell, no budgets; a pass here says the C is

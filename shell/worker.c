@@ -793,8 +793,8 @@ static int vocr_run_one(VjoGameOcrResult *result, uint32_t flags, const char *fo
     *ran = result->fallback ? fallback : model;
     /* The result's lines (about 21: the job, its capture, memory, speed and lines,
      * and every game-worker step), formatted from the result alone, go out with one
-     * append per file instead of one each: an append of log.txt costs 12-46 ms on
-     * the console (#81's self-test timestamps). */
+     * append per file instead of one each: a file append costs 12-46 ms on the
+     * console (#81's self-test timestamps). */
     VjoLogBatch batch;
     char batch_buf[4096];
     vjo_log_batch_begin(&batch, batch_buf, sizeof(batch_buf));
