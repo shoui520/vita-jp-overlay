@@ -188,19 +188,25 @@ minus the 4 MiB reserve, the job's workspace and capture block and the weights i
 negative headroom is a refused job. The Shell's `game vocr memory:` log line carries the same figure
 for every OCR job, not only the self-test's.
 
-Then a **model tier** table: vita-vn-ocr #74's proposed Small / Normal / Large recognizers
-(`docs/model-tiers.md` there, section 1.5), each priced at its ceiling with that document's formula,
-page(weights) + page(max(the line finder's 83,323 B arena, the tier's W8I arena) + 3,760 B of runtime
-structs) + the 61,440 B capture block + the 516,096 B line-block ceiling, plus the tier's own reserve
-(4 / 8 / 16 MiB), against the free USER the game had before the worker's first block. The
-recommendation is the largest tier whose first job fits. It is one sample in one game, and the tiers
-are a proposal; the table says so.
+Then a **model tier** table: the Small / Normal / Large recognizer tiers of
+[`tools/model_tiers.json`](../tools/model_tiers.json), the one table the Overlay app's tier choice
+reads as well, so the analyser and the app cannot price different tiers. Each tier is priced at its
+ceilings, an estimate, with vita-vn-ocr's formula (`docs/model-tiers.md` there, section 1.5):
+page(weights) + page(max(the line finder's 83,323 B arena, the tier's W8I arena) + 3,760 B of
+runtime structs) + the 61,440 B capture block + the 516,096 B line-block ceiling, plus the tier's
+own reserve (4 / 8 / 16 MiB), against the free USER the game had before the worker's first block.
+The recommendation is the largest tier whose first job fits: it is one sample in one game, and
+memory alone. The weights ceilings are the owner's of 2026-10-14 (Small under 1 MB, Normal at most
+1.6 MB, Large at most 2.5 MB of int8 weights); the box time is each tier's limit for a typical full
+textbox, 3 lines of about 640 px on one Cortex-A9 core at 444 MHz, estimated, and wins where it is
+tighter. A table the analyser cannot read leaves the tiers out with a finding; the verdict never
+depends on them.
 
-| tier | weights ceiling | W8I arena ceiling | first job needs | reserve | free USER needed |
-|---|---|---|---|---|---|
-| Large | 9,000,000 B | 1,310,720 B | 10,895,360 B | 16 MiB | 27,672,576 B |
-| Normal | 4,000,000 B | 262,144 B | 4,845,568 B | 8 MiB | 13,234,176 B |
-| Small | < 1,000,000 B | 131,072 B | 1,716,224 B | 4 MiB | 5,910,528 B |
+| tier | weights at most | box time | W8I arena ceiling | first job needs | reserve | free USER needed |
+|---|---|---|---|---|---|---|
+| Large | 2,500,000 B | < 3 s | 1,310,720 B | 4,395,008 B | 16 MiB | 21,172,224 B |
+| Normal | 1,600,000 B | < 2 s | 262,144 B | 2,445,312 B | 8 MiB | 10,833,920 B |
+| Small | 999,999 B | < 1 s | 131,072 B | 1,716,224 B | 4 MiB | 5,910,528 B |
 
 ## Collecting everything: `--collect`
 

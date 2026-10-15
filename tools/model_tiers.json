@@ -1,0 +1,13 @@
+{
+  "source": "The Small / Normal / Large recognizer tiers, read by tools/analyse_selftest.py and the Overlay app's tier choice: change them here only. Weights: the owner's int8 ceilings of 2026-10-14 (Small < 1 MB, Normal <= 1.6 MB, Large <= 2.5 MB), set from v0.8.0-test.1's console timings and kept (2026-10-15) until a test build's console logs confirm larger ones. Box time: the owner's limits of 2026-10-14 for a typical full textbox (box), estimated; where a time limit is tighter than a weights ceiling, the time limit wins. Arena ceilings and the per-tier reserve: bee-san/vita-vn-ocr docs/model-tiers.md, sections 1.3 and 1.5. Default: Normal (owner, 2026-10-15).",
+  "default": "normal",
+  "box": {"lines": 3, "line_px": 640, "cores": 1, "mhz": 444},
+  "tiers": [
+    {"id": "small", "name": "Small", "weights_max_bytes": 999999, "box_ms_under": 1000,
+     "arena_max_bytes": 131072, "reserve_bytes": 4194304},
+    {"id": "normal", "name": "Normal", "weights_max_bytes": 1600000, "box_ms_under": 2000,
+     "arena_max_bytes": 262144, "reserve_bytes": 8388608},
+    {"id": "large", "name": "Large", "weights_max_bytes": 2500000, "box_ms_under": 3000,
+     "arena_max_bytes": 1310720, "reserve_bytes": 16777216}
+  ]
+}

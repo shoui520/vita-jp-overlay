@@ -14,10 +14,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "tools/analyse_selftest.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+TIERS_JSON = ROOT / "tools/model_tiers.json"
 sys.path.insert(0, str(ROOT / "tools"))
 import analyse_selftest as a  # noqa: E402
 
@@ -237,13 +239,21 @@ class AnalyseV2(unittest.TestCase):
         self.assertNotIn("probe", heads)  # the probe makes no memory check
         t = as_json["tiers"]
         self.assertEqual((t["free_user"], t["recommendation"]), (91_226_112, "Large"))
-        # the formula of vita-vn-ocr docs/model-tiers.md 1.5, at each tier's ceiling
-        self.assertEqual([row["need"] for row in t["rows"]], [10_895_360, 4_845_568, 1_716_224])
+        # the formula of vita-vn-ocr docs/model-tiers.md 1.5, at each tier's ceilings of tools/model_tiers.json
+        self.assertEqual([row["need"] for row in t["rows"]], [4_395_008, 2_445_312, 1_716_224])
+        self.assertEqual([row["weights"] for row in t["rows"]], [2_500_000, 1_600_000, 999_999])
         self.assertEqual([row["reserve"] for row in t["rows"]], [16 << 20, 8 << 20, 4 << 20])
+        self.assertEqual([row["box_ms"] for row in t["rows"]], [3000, 2000, 1000])
+        self.assertEqual([row["id"] for row in t["rows"]], ["large", "normal", "small"])
         self.assertIn("recommendation: Large", r.stdout)
+        self.assertIn("  Large     2,500,000     < 3 s  1,310,720        4,395,008  16,777,216    70,053,888 yes\n",
+                      r.stdout)
+        self.assertIn("box time: the tier's limit for a typical full textbox (3 lines of about 640 px, 1 core at "
+                      "444 MHz), estimated; the recommendation is memory alone", r.stdout)
 
     def test_the_tier_falls_with_the_free_memory(self):
-        for free, want in ((27_672_576, "Large"), (27_672_575, "Normal"), (13_234_176, "Normal"), (13_234_175, "Small"),
+        # each tier's first job (above) plus its reserve, and one byte less
+        for free, want in ((21_172_224, "Large"), (21_172_223, "Normal"), (10_833_920, "Normal"), (10_833_919, "Small"),
                            (5_910_528, "Small"), (5_910_527, None)):
             self.assertEqual(a.tier_table(free)["recommendation"], want, free)
         # a refused stage has a negative headroom and says so: the textbox stage in a game with 5,000,000 B free
@@ -401,6 +411,102 @@ class AnalyseV2(unittest.TestCase):
                                  f"vjo-selftest-writer DIR {name}")
                 # the marker is removed when (and only when) the run finished
                 self.assertEqual((Path(tmp) / "selftest.txt").exists(), name in ("incomplete", "waiting"))
+
+
+class SharedTierTable(unittest.TestCase):
+    """tools/model_tiers.json is the only copy of the tiers (audit-test-build-2 N2): the analyser prices
+    its tiers and nothing of its own, it holds today's ceilings and box time limits, the Overlay app's
+    extra keys change nothing here, and the release ships it beside the analyser."""
+
+    def table(self):
+        return json.loads(TIERS_JSON.read_text(encoding="utf-8"))
+
+    def test_the_analyser_prices_the_shared_tables_tiers(self):
+        table = self.table()
+        self.assertIsNone(a.TIERS_ERROR)
+        self.assertEqual(a.TIERS_FILE, TIERS_JSON)
+        self.assertEqual(list(a.TIERS), [{k: t[k] for k in ("id", "name", *a.TIER_KEYS)}
+                                         for t in reversed(table["tiers"])])
+        self.assertEqual((a.TIER_DEFAULT, a.TIER_BOX), (table["default"], table["box"]))
+        # no ceiling of its own (the superseded 9 MB / 4 MB tuple included)
+        source = SCRIPT.read_text(encoding="utf-8")
+        for number in ("999_999", "1_600_000", "2_500_000", "9_000_000", "4_000_000", "1_310_720", "262_144",
+                       "131_072"):
+            self.assertNotIn(number, source)
+
+    def test_the_tiers_are_todays_ceilings_and_box_time_limits(self):
+        # Weights: the owner's ceilings of 2026-10-14 18:09Z, kept by the conductor's correction of
+        # 2026-10-15 05:56Z; box time: the owner's limits of 07:33Z, a typical full textbox (3 lines of
+        # about 640 px) on one A9 core at 444 MHz; default Normal (owner, 2026-10-15 04:52Z).
+        table = self.table()
+        self.assertEqual([(t["id"], t["name"], t["weights_max_bytes"], t["box_ms_under"]) for t in table["tiers"]],
+                         [("small", "Small", 999_999, 1000), ("normal", "Normal", 1_600_000, 2000),
+                          ("large", "Large", 2_500_000, 3000)])
+        self.assertEqual(table["box"], {"lines": 3, "line_px": 640, "cores": 1, "mhz": 444})
+        self.assertEqual(table["default"], "normal")
+        # vita-vn-ocr docs/model-tiers.md 1.3 and 1.5: the W8I arena ceilings and the per-tier reserve
+        self.assertEqual([(t["arena_max_bytes"], t["reserve_bytes"]) for t in table["tiers"]],
+                         [(131_072, 4 << 20), (262_144, 8 << 20), (1_310_720, 16 << 20)])
+
+    def test_other_keys_are_ignored_and_a_table_it_cannot_use_is_refused(self):
+        table = self.table()
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "model_tiers.json"
+
+            def load(t):
+                path.write_text(json.dumps(t), encoding="utf-8")
+                return a.load_tiers(path)
+
+            # the keys the Overlay app's tier choice adds (overlay-ux-tiers) change nothing here
+            extra = json.loads(json.dumps(table))
+            extra["est_box_basis"] = "the shipped model at the console's measured ms per CTC frame"
+            for t, model in zip(extra["tiers"], ("VOCR3_FL10_w8.vocr", "VOCR3_H15_w8.vocr", "VOCR4_W20_w8.vocr")):
+                t.update(model=model, tagline="fastest", est_box_ms=700, need_bytes=6_000_000)
+            self.assertEqual(load(extra), (a.TIERS, a.TIER_DEFAULT, a.TIER_BOX))
+            for broken in (lambda t: t["tiers"][1].pop("reserve_bytes"),
+                           lambda t: t["tiers"][0].update(weights_max_bytes="999999"),
+                           lambda t: t["tiers"][0].update(box_ms_under=True),
+                           lambda t: t["tiers"][2].update(arena_max_bytes=0),
+                           lambda t: t["tiers"].reverse(),               # largest first
+                           lambda t: t["tiers"][2].update(box_ms_under=1500),  # a larger tier's limit below Normal's
+                           lambda t: t["tiers"][2].update(id="normal"),
+                           lambda t: t.update(default="medium"),
+                           lambda t: t.update(tiers=[]),
+                           lambda t: t["box"].pop("mhz"),
+                           lambda t: t.pop("tiers")):
+                copy = json.loads(json.dumps(table))
+                broken(copy)
+                with self.assertRaises(ValueError):
+                    load(copy)
+            path.write_text("{not json", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                a.load_tiers(path)
+            with self.assertRaises(OSError):
+                a.load_tiers(Path(d) / "missing.json")
+
+    def test_without_the_table_the_verdict_stands_and_says_why(self):
+        text = (FIXTURES / "selftest-v2-pass.txt").read_text()
+        with mock.patch.object(a, "TIERS", ()), mock.patch.object(a, "TIERS_ERROR", "model_tiers.json: missing"):
+            out = a.analyse(text)
+            shown = a.render(out)
+        self.assertEqual((out["ocr_result"], out["diagnostics_result"]), ("PASS", "PASS"))
+        self.assertNotIn("tiers", out)
+        self.assertIn("The model tiers were not priced: model_tiers.json: missing.", out["findings"])
+        self.assertNotIn("model tiers (", shown)
+        self.assertTrue(shown.endswith("PASS: every stage completed; the figures above are this console's."))
+
+    def test_the_release_ships_the_table_beside_the_analyser(self):
+        cmake = (ROOT / "vita/CMakeLists.txt").read_text(encoding="utf-8")
+        copy = [line for line in cmake.splitlines() if "${ROOT}/tools/analyse_selftest.py" in line]
+        self.assertEqual(len(copy), 1, copy)
+        self.assertIn(" ${ROOT}/tools/model_tiers.json ", copy[0])
+        self.assertTrue(copy[0].rstrip().endswith(" ${STAGE}/tools/"), copy[0])
+
+    def test_the_self_test_doc_shows_the_analysers_table(self):
+        doc = (ROOT / "docs/self-test.md").read_text(encoding="utf-8")
+        for r in a.tier_table(0)["rows"]:
+            self.assertIn(f"| {r['tier']} | {r['weights']:,} B | < {r['box_ms'] / 1000:g} s | {r['arena']:,} B | "
+                          f"{r['need']:,} B | {r['reserve'] >> 20} MiB | {r['need'] + r['reserve']:,} B |", doc)
 
 
 # The kernel memory routes exactly as #75's first guard (7bba2aa: only pointers at or above 0x40000000

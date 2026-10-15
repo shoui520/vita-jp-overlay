@@ -451,11 +451,18 @@ because the game or system uses memory concurrently.
 
 Model files are opened by the existing kernel worker because some games cannot
 access the `ux0:` storage namespace (`0x80010013`, ENODEV). The broker accepts
-only the two VOCR3 model names and the three original VOCR model names
-in `ux0:data/VitaJPOverlay/ocr`, checks
-their lengths, reports their modification time, and copies at most 32 KiB per
-request into game-owned memory. Each model call waits (at most 50 ms, without
-the kernel lock) for the kernel worker instead of polling with a 1 ms sleep.
+only these names in `ux0:data/VitaJPOverlay/ocr`:<!-- names from kernel/game_ocr.c, written by tools/docs_model_names.py -->
+the recognizers `VOCR3_H15_w8.vocr` and `VOCR3_FL10_w8.vocr` (VOCR3, release
+v0.2.5-vocr3.1); `FL10_w8.vocr`, `H15_w8.vocr` and `F20_w8.vocr` (VOCR1, release
+v0.2.0); `VOCR4_W20_w8.vocr` (VOCR4, release v0.2.5-vocr4.1); and the character
+LMs `vocr_lm_o3_500k.vlm`, `vocr_lm_o3_1000k.vlm`, `vocr_lm_o3_2000k.vlm` and
+`vocr_lm_o3_4000k.vlm` (release v0.2.6-ctclm.2)<!-- end of the names -->.
+A job opens only its own model and fallback, the LMs up to the tier its request
+allows and, when the request sets a cascade ceiling, the cascade's model. The
+broker checks their lengths, reports their modification time, and copies at
+most 32 KiB per request into game-owned memory. Each model call waits (at most
+50 ms, without the kernel lock) for the kernel worker instead of polling with a
+1 ms sleep.
 The game then checks SHA-256 and runs inference. The kernel holds one 32 KiB
 staging buffer, no complete model, and no saved game pointers. Cancellation or
 process exit drains any file operation before the next job can reuse its slot.
@@ -575,6 +582,13 @@ the dictionary separately, run `python3 tools/prepare_plaintext.py --source
 /path/to/plaintext-dicts -o plaintext.vjdict`; without `--source`, authenticated
 GitHub CLI access can fetch the pinned archive. Both the archive and unpacked
 file must match their committed checksums.
+
+CI builds the Vita targets in the `vitasdk/vitasdk:2026.08` container, and the
+Overlay app's `eboot.bin` depends on the SDK's libraries: another VitaSDK gives
+it other bytes. `bash tools/ci_container_build.sh --compare RELEASE.zip`
+rebuilds a commit in that container, pinned by the digest CI pulled, under
+docker or podman, and compares the result with a release
+([how](docs/offline-testing.md#cis-vita-build-in-its-container)).
 
 The cross-build produces a base ZIP containing the frozen dictionary and
 attribution. `tools/package_release.py BASE.zip -o RELEASE.zip --models

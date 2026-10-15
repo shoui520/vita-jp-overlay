@@ -314,10 +314,14 @@ class VocrDefaults(unittest.TestCase):
         self.assertIn("--set vocr_model=VOCR3_H15_w8.vocr", installer)
         self.assertIn("--set vocr_fallback_model=VOCR3_FL10_w8.vocr", installer)
         package = (ROOT / "tools/package_release.py").read_text()
-        self.assertIn('"vocr_model": VOCR_DEFAULT_MODEL', package)
-        self.assertIn('"vocr_fallback_model": VOCR_FALLBACK_MODEL', package)
+        self.assertNotIn('"vocr_model": "', package)  # no model name of its own: the template's
         # VOCR3 and the v0.2.0 fallback are both shipped, each with its own release's pins
         import package_release  # noqa: E402
+        generations = {name: {"generation": prepare_ocr.VOCR_GENERATION[tag]}
+                       for name, _, tag, _ in package_release.shipped_models() if name.endswith(".vocr")}
+        defaults = package_release.manifest_defaults(example, generations)
+        self.assertEqual((defaults["vocr_model"], defaults["vocr_fallback_model"], defaults["ocr_engine"]),
+                         (prepare_ocr.VOCR_DEFAULT_MODEL, prepare_ocr.VOCR_FALLBACK_MODEL, "VOCR3"))
         shipped = {name: (pins[name], tag, role) for name, pins, tag, role in package_release.shipped_models()}
         self.assertEqual(list(shipped)[:4], ["VOCR3_H15_w8.vocr", "VOCR3_FL10_w8.vocr", "H15_w8.vocr", "FL10_w8.vocr"])
         self.assertEqual(shipped["VOCR3_H15_w8.vocr"][1:], ("v0.2.5-vocr3.1", "default"))

@@ -24,7 +24,8 @@ class ReleaseInstall(unittest.TestCase):
                        "ux0/data/VitaJPOverlay/ocr", "ux0/data/VitaJPOverlay/dictionaries"):
             (self.package / folder).mkdir(parents=True, exist_ok=True)
         for name in ("install_ftp.sh", "package_release.py", "prepare_ocr.py", "prepare_plaintext.py",
-                     "migrate_config.py", "patch_tai_config.py", "collect_vita.py", "analyse_selftest.py"):
+                     "migrate_config.py", "patch_tai_config.py", "collect_vita.py", "analyse_selftest.py",
+                     "model_tiers.json"):
             shutil.copyfile(ROOT / "tools" / name, self.package / "tools" / name)
         shutil.copyfile(ROOT / "tools/install-vita.sh", self.package / "install-vita.sh")
         for name in ("config.ini", "ux0/data/VitaJPOverlay/config.ini"):

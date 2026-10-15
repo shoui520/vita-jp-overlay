@@ -16,6 +16,14 @@ from prepare_plaintext import FILENAME, load_manifest, validate
 
 DATA = "ux0/data/VitaJPOverlay/"
 SETTING_KEY = re.compile(r"[a-z][a-z0-9_]*")
+# The config template's on | off switches and its numbers, as core/config.c parses them: the manifest's
+# defaults give them as true/false and as integers, and every other setting as the template writes it.
+SWITCHES = ("japanese_only_selection", "ocr_skip_blank_lines", "log_file", "anki_mining")
+NUMBERS = ("local_dictionary_results", "font_size_ja", "font_size_en", "ocr_settle_ms", "ocr_settle_max_ms",
+           "ocr_cascade_ms")
+# Settings that can hold a credential (an audio source URL can carry one): the defaults say only "set" or
+# "", because install_ftp.sh --collect copies the manifest's defaults into the zip the owner sends.
+SECRET = re.compile(r"api_key$|^anki_audio_url$")
 
 
 def shipped_models():
@@ -61,6 +69,42 @@ def apply_settings(text, settings):
     if missing:
         raise ValueError("Not a setting of the config template: " + ", ".join(missing))
     return "\n".join(out) + "\n"
+
+
+def template_settings(text):
+    """key -> value of every setting of a config template, in its order."""
+    out = {}
+    for line in text.splitlines():
+        m = re.match(r"^(\w+)\s*=\s*(.*?)\s*$", line)
+        if m:
+            if m.group(1) in out:
+                raise ValueError("The config template sets " + m.group(1) + " twice")
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def manifest_defaults(text, shipped):
+    """The manifest's defaults: every setting of the package's config template (its --set settings
+    applied), the on | off switches as true/false, the numbers as integers and a credential only as
+    "set" or ""; then ocr_engine, the generation of its vocr_model (the local engine's name in the
+    Overlay app), and anki, anki_mining's value under its earlier name."""
+    defaults = {}
+    for key, value in template_settings(text).items():
+        if SECRET.search(key):
+            value = "set" if value else ""
+        elif key in SWITCHES:
+            if value.lower() not in ("on", "off"):
+                raise ValueError(f"{key}: expected on or off, not {value!r}")
+            value = value.lower() == "on"
+        elif key in NUMBERS:
+            if not re.fullmatch(r"\d+", value):
+                raise ValueError(f"{key}: expected a number, not {value!r}")
+            value = int(value)
+        defaults[key] = value
+    generation = shipped.get(defaults.get("vocr_model"), {}).get("generation")
+    if generation is None:
+        raise ValueError(f"vocr_model: {defaults.get('vocr_model')!r} is not one of the package's recognizers")
+    return {**defaults, "ocr_engine": generation, "anki": defaults.get("anki_mining") is True}
 
 
 def digest(path):
@@ -145,15 +189,9 @@ def write_package(base, output, models, assets, conversion, version, source_revi
     if attribution.stat().st_size != size or digest(attribution) != sha:
         raise ValueError("The LMs' " + VOCR_LM_ATTRIBUTION + " checksum failed: not release " + VOCR_LM_TAG + "'s")
     assets[DATA + "ocr/LM-" + VOCR_LM_ATTRIBUTION] = attribution
+    # The defaults are the package's config template's (the same file as both config.ini copies).
     manifest = {"version": version, "files": {}, "dictionary": conversion,
-                "defaults": {"ocr_backend": "vocr", "ocr_engine": shipped[VOCR_DEFAULT_MODEL]["generation"],
-                             "vocr_model": VOCR_DEFAULT_MODEL,
-                             "vocr_fallback_model": VOCR_FALLBACK_MODEL,
-                             "dictionary": "local", "local_dictionaries": "plaintext.vjdict",
-                             "japanese_only_selection": True,
-                             "ocr_mode": "auto", "log_file": True, "anki": settings.get("anki_mining") == "on",
-                             "ocr_lm": settings.get("ocr_lm", "1000k"),
-                             "ocr_cascade_ms": int(settings.get("ocr_cascade_ms", "2000"))},
+                "defaults": manifest_defaults(assets["config.ini"].read_text(encoding="utf-8"), shipped),
                 "models": shipped}
     if settings:
         # Applied by install-vita.sh after its own settings (tools/install-vita.sh).

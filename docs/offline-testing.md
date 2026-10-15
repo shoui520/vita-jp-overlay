@@ -29,6 +29,52 @@ plus the Python tool suites run in the `host` job (with the frozen dictionary ch
 word lookup on real recognized lines and the step that unpacks the dictionary for it); `test_jpegsw.py` and the Hachidori relay
 contract test complete it.
 
+### CI's Vita build in its container
+
+The `vita` job builds in the `vitasdk/vitasdk:2026.08` container. The plugins link only libgcc
+and the SDK's import stubs (`-nostdlib`), and their segments come out the same from another
+VitaSDK. The Overlay app's `eboot.bin` links the SDK's libraries, which differ, so it does not:
+for the same commit, v0.8.0-test.2's audit measured `6ee23974…` (segment 0 of 477,804 B) from the
+fleet's VitaSDK, also GCC 15.2.0, against CI's `b60205c6…` (473,004 B). `tools/ci_container_build.sh`
+builds a commit the way the job does, so its eboot can be compared with a release's:
+
+```sh
+bash tools/ci_container_build.sh --rev 4ac02ac --compare VitaJPOverlay-0.8.0-test.2.zip
+bash tools/ci_container_build.sh --vocr-source /path/to/vita-vn-ocr --compare VitaJPOverlay-0.8.0-test.2.zip
+```
+
+- **The image, by digest.** `vitasdk/vitasdk@sha256:fd82d88ff456d118eef16533ebf9a3a6ae0e292684fb8a3a35f15f0707b4692d`,
+  the tag's multi-platform index as CI pulled it for v0.8.0-test.2 (Release run 38689391878, job
+  `vita`, 2026-10-15 05:55Z: its "Initialize containers" step prints `Digest: sha256:fd82d88f…`). Its
+  `linux/amd64` image, the one CI's runner runs and the script asks for, is `sha256:5c0c8b36…`
+  (GCC 15.2.0). The workflow names the tag: if the tag moves, that step's digest changes, and
+  `VJO_CI_IMAGE` runs the script with the new one.
+- **The job's steps.** The commit's tree (`git archive`, what `actions/checkout` gives; uncommitted
+  changes are not built) is unpacked at CI's path, `/__w/vita-jp-overlay/vita-jp-overlay`. Then the
+  job's own commands run: its `apt-get install` (of whatever Ubuntu serves that day, as for CI),
+  `tools/setup_toolchain.sh` (the checksum-pinned app packages, vita-headers, ScePaf,
+  psp2cxml-tool) and `cmake -S vita -B build/vita -DCMAKE_BUILD_TYPE=Release`. With
+  `--vocr-source` (a vita-vn-ocr clone holding the commit `cmake/VocrOCR.cmake` pins) its runtime
+  goes to `.refs/vita-vn-ocr` and the build is the job's `cmake --build build/vita`; the `release`
+  target, which needs the private dictionary, is not run. Without it only the Overlay app's VPK is
+  built, with `VJO_WITH_VOCR=OFF`, which the app does not use.
+- **Nothing of the host goes in.** The source goes in on standard input and the built files come out
+  on standard output; nothing is mounted. The container needs the network, as CI's does: apt and
+  GitHub (clones, release downloads, codeload.github.com).
+- **The comparison.** `--compare` takes an `eboot.bin`, a VPK, or a zip holding
+  `JPOverlaySettings.vpk` (a release, or CI's `VitaJPOverlay` artifact). The VPK's files are compared,
+  not its zip bytes: `vita-pack-vpk` records each file's time, so two builds never give the same
+  VPK file. A package's plugins and RCO are compared as well when they were built. The script exits
+  1 on any difference and prints the built files' sha256.
+
+Measured on the fleet box with docker 25.0 (podman is supported by the script but was not run),
+the image already pulled: building main `4ac02ac` (v0.8.0-test.2's commit), the Overlay app alone
+took 66 s. Its `eboot.bin` is `b60205c61ed20c62c276ebb357aaac7c03134202fb17e681016011d13e9cc725`
+(371,393 B), byte-identical to the one in `VitaJPOverlay-0.8.0-test.2.zip`'s VPK, and so are the
+VPK's other five files. The whole build (with vita-vn-ocr `a540027`, 79 s) also gives the release's
+kernel, Shell and OCR plugins and RCO byte for byte (`c8fc5018…`, `a1a0eee9…`, `79492384…`,
+`2140d87b…`). Nothing here runs on a console; it shows the bytes are CI's, not that they work.
+
 ## 3. ARM under qemu-arm: the same C on the Vita's CPU
 
 `tools/arm_host_tests.sh` builds the pure-C kernel and core suites with a Linux ARM toolchain

@@ -81,8 +81,8 @@ class Collect(unittest.TestCase):
         self.root = Path(tmp.name)
         self.package = self.root / "package"
         (self.package / "tools").mkdir(parents=True)
-        for name in ("install_ftp.sh", "collect_vita.py", "analyse_selftest.py", "package_release.py", "prepare_ocr.py",
-                     "prepare_plaintext.py", "migrate_config.py", "patch_tai_config.py"):
+        for name in ("install_ftp.sh", "collect_vita.py", "analyse_selftest.py", "model_tiers.json", "package_release.py",
+                     "prepare_ocr.py", "prepare_plaintext.py", "migrate_config.py", "patch_tai_config.py"):
             shutil.copyfile(ROOT / "tools" / name, self.package / "tools" / name)
         shutil.copyfile(ROOT / "tools/install-vita.sh", self.package / "install-vita.sh")
         self.device = self.root / "device"

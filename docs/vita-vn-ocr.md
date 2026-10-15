@@ -130,7 +130,9 @@ model a job uses when the game has room for it. The game worker checks free
 fallback. Resident fallback weights stay while the default still does not fit,
 and are released for it once it does. A missing, wrong or corrupt `vocr_model`
 file also makes the game's later jobs use the fallback (until the game
-restarts). The kernel opens only the two pinned names the Shell submitted; the
+restarts). Of the recognizers, the kernel opens only the two pinned names the
+Shell submitted (and, since API 20, the cascade's model when the request sets
+its ceiling; the LMs are separate files); the
 log names the model that ran and, after a memory fallback, what the default
 would have needed. Every pinned model is inside
 the console budget ceiling (weights ≤ 1,600,000 B, recognizer arena ≤
@@ -155,8 +157,14 @@ cannot read a newer capture or publish old results. Model reads finish short
 reads in at most 32 KiB calls and check cancellation between calls. Each call
 waits up to 50 ms in the kernel for the worker thread's result; only a slower
 read returns BUSY, which the game repeats after a 1 ms yield. The kernel
-allows only the VOCR3 FL10/H15 and v0.2.0 FL10/H15/F20 models under the exact directory above, with their pinned
-file lengths; it does not accept a caller-supplied file path. Each async Open,
+allows only these names under the exact directory above:<!-- names from kernel/game_ocr.c, written by tools/docs_model_names.py -->
+the recognizers `VOCR3_H15_w8.vocr` and `VOCR3_FL10_w8.vocr` (VOCR3, release
+v0.2.5-vocr3.1); `FL10_w8.vocr`, `H15_w8.vocr` and `F20_w8.vocr` (VOCR1, release
+v0.2.0); `VOCR4_W20_w8.vocr` (VOCR4, release v0.2.5-vocr4.1); and the character
+LMs `vocr_lm_o3_500k.vlm`, `vocr_lm_o3_1000k.vlm`, `vocr_lm_o3_2000k.vlm` and
+`vocr_lm_o3_4000k.vlm` (release v0.2.6-ctclm.2)<!-- end of the names -->,
+each with its pinned file length; it does not accept a caller-supplied file
+path. Each async Open,
 Read or Close is tied to the claimed job's PID and sequence. Reads also require
 the current foreground epoch, and completion copies use the current syscall's
 destination pointer. No pointer is retained across a file operation. Close
@@ -675,9 +683,15 @@ vocr_fallback_model = FL10_w8.vocr
 
 `vocr_model = VOCR3_FL10_w8.vocr` always runs the smaller model; `vocr_fallback_model = none`
 never falls back. `install-vita.sh` sets the package's defaults each time it runs, so set the choice
-again after a reinstall. The game worker and the kernel's model broker accept exactly these names
-and F20, each at its pinned size and SHA-256; `core/vocr_models.c` gives each its generation
-(VOCR3, or VOCR1 for v0.2.0's), the name of the local engine in the Overlay app.
+again after a reinstall. The game worker and the kernel's model broker accept exactly these files,
+each at its pinned size and SHA-256:<!-- names from kernel/game_ocr.c, written by tools/docs_model_names.py -->
+the recognizers `VOCR3_H15_w8.vocr` and `VOCR3_FL10_w8.vocr` (VOCR3, release
+v0.2.5-vocr3.1); `FL10_w8.vocr`, `H15_w8.vocr` and `F20_w8.vocr` (VOCR1, release
+v0.2.0); `VOCR4_W20_w8.vocr` (VOCR4, release v0.2.5-vocr4.1); and the character
+LMs `vocr_lm_o3_500k.vlm`, `vocr_lm_o3_1000k.vlm`, `vocr_lm_o3_2000k.vlm` and
+`vocr_lm_o3_4000k.vlm` (release v0.2.6-ctclm.2)<!-- end of the names -->.
+`core/vocr_models.c` gives each recognizer its generation, the name of the local engine in the
+Overlay app.
 
 The v0.2.0 weights are the int8 assets of the vita-vn-ocr
 [v0.2.1 release](https://github.com/bee-san/vita-vn-ocr/releases/tag/v0.2.1)
