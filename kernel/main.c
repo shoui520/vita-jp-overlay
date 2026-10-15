@@ -603,13 +603,21 @@ int module_stop(SceSize argc, const void *args)
     int busy = game_ocr_shutdown_locked();
     VJO_UNLOCK();
     if (busy) return SCE_KERNEL_STOP_FAIL;
-    /* A game worker's take waiting for a job (at most 100 ms) was woken by the
-     * shutdown: it leaves the module's code before the module goes. */
+    /* A take or read waiting in the kernel (at most 100 ms) was woken by the
+     * shutdown: it leaves the module's code before the module goes. A thread that
+     * has given its count back still runs a few instructions of the module after
+     * the lock: one more millisecond for them. One that does not leave in time
+     * fails the stop, which is undone, as a stop refused for a job is. */
     for (int i = 0;; i++) {
         VJO_LOCK();
         busy = game_ocr_waiters_locked();
+        if (busy && i >= 200) game_ocr_stop_failed_locked();
         VJO_UNLOCK();
-        if (!busy) break;
+        if (busy && i >= 200) klog("module_stop: %d OCR waiter(s) still in the kernel after 200 ms; stop undone", busy);
+        if (!busy) {
+            if (i) ksceKernelDelayThread(1000);
+            break;
+        }
         if (i >= 200) return SCE_KERNEL_STOP_FAIL;
         ksceKernelDelayThread(1000);
     }

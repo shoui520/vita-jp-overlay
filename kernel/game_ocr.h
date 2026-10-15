@@ -18,6 +18,8 @@ int game_ocr_capture_busy_locked(void);
 int game_ocr_shutdown_locked(void);
 /* Threads still inside vjoOcrTake's or vjoOcrRead's wait (module_stop waits for 0). */
 int game_ocr_waiters_locked(void);
+/* module_stop failed after game_ocr_shutdown_locked: undoes it. */
+void game_ocr_stop_failed_locked(void);
 void game_ocr_shell_changed_locked(void);
 void game_ocr_foreground_changed_locked(void);
 /* The registered game worker's process (0: none), for vjoMemInfo's caller check. */

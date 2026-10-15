@@ -190,9 +190,16 @@ int ksceKernelLockMutex(SceUID uid, int count, void *timeout)
 {
     (void)count; (void)timeout; TEST_CHECK(uid == g.lock && locks == 0); locks++; return 0;
 }
+/* The waiter count as another thread (module_stop) would see it right after each unlock
+ * inside a syscall: it must already count a caller about to wait, and no longer count
+ * one that has left the wait (the count is changed under the lock, never after it). */
+static int record_unlocks, unlock_waiters[8];
+static unsigned unlock_count;
 int ksceKernelUnlockMutex(SceUID uid, int count)
 {
-    (void)count; TEST_CHECK(uid == g.lock && locks == 1); locks--; return 0;
+    (void)count; TEST_CHECK(uid == g.lock && locks == 1); locks--;
+    if (record_unlocks && syscall_depth == 1 && unlock_count < 8) unlock_waiters[unlock_count++] = waiters;
+    return 0;
 }
 int taiGetModuleInfoForKernel(SceUID pid, const char *name, tai_module_info_t *info)
 {
@@ -267,6 +274,7 @@ static void setup(void)
     file_live = open_error = seek_error = read_error = close_error = eof = short_read = bad_size = during_io = 0;
     done_events = waits = stats = 0; done_pending = wait_runs_worker = stat_error = 0; expect_fallback = 0; expect_lm = NULL;
     job_bit = result_bit = 0; job_events = result_events = job_waits = result_waits = 0; during_event_wait = NULL;
+    record_unlocks = 0; unlock_count = 0;
     memset(&file_stat, 0, sizeof(file_stat));
     file_stat.st_mtime = (SceDateTime){2026, 10, 11, 9, 43, 58, 123456};
     TEST_ASSERT(vjoOcrRegister() == 0);
@@ -380,13 +388,87 @@ static void read_wakes_on_complete(void)
     setup(); seq = submit(); take(seq); TEST_CHECK(vjoOcrComplete(&message) == 0); TEST_CHECK(result_bit == 1);
     uint32_t next = submit(); take(next); caller = 3; t0 = model_clock;
     TEST_CHECK(vjoOcrRead(next, &message) == 1 && result_waits == 1 && model_clock - t0 == 50000);
-    /* a read waits only for a queued or claimed job, which refuses the shutdown (module_stop fails then) */
+    /* a queued or claimed job refuses the shutdown (module_stop fails then, and nothing changed) */
     setup(); seq = submit(); caller = 3;
     VJO_LOCK(); TEST_CHECK(game_ocr_shutdown_locked() == VJO_ERR_BUSY && !game_ocr_waiters_locked()); VJO_UNLOCK();
     /* a stale or foreign read: refused without waiting */
     setup(); seq = submit(); caller = 3;
     TEST_CHECK(vjoOcrRead(seq + 1, &message) == VJO_ERR_ARG && !result_waits);
     caller = 4; TEST_CHECK(vjoOcrRead(seq, &message) == VJO_ERR_PERM && !result_waits);
+}
+
+/* The read side of the waiter count (audit-overlay-perf-4, B1; its cases): a read can be
+ * waiting when the shutdown passes, since the game's exit during the read drops the claim
+ * that would refuse it. The shutdown counts that reader and wakes it; every waited read
+ * gives its count back; a read of a cancelled job never waits. */
+static int stop_rc = 99;
+static void game_exits_then_module_stops(void)
+{
+    game_ocr_process_gone(7); /* its claim goes: the shutdown is not refused */
+    VJO_LOCK(); waiters_seen = waiters; stop_rc = game_ocr_shutdown_locked(); VJO_UNLOCK();
+}
+
+static void read_waiters_are_counted_and_woken(void)
+{
+    setup(); uint32_t seq = submit(); take(seq);
+    caller = 3; during_event_wait = game_exits_then_module_stops; stop_rc = 99;
+    uint64_t t0 = model_clock;
+    TEST_CHECK(vjoOcrRead(seq, &message) == VJO_ERR_CANCELLED);
+    TEST_CHECK(stop_rc == 0 && waiters_seen == 1 && model_clock == t0); /* counted, woken at once */
+    TEST_MSG("shutdown rc %d, waiters %d, %llu us", stop_rc, waiters_seen, (unsigned long long)(model_clock - t0));
+    VJO_LOCK(); TEST_CHECK(game_ocr_waiters_locked() == 0); VJO_UNLOCK();
+    /* every waited read gives its count back, or module_stop would fail for good */
+    setup(); seq = submit(); take(seq); caller = 3;
+    TEST_CHECK(vjoOcrRead(seq, &message) == 1 && result_waits == 1);
+    VJO_LOCK(); TEST_CHECK(game_ocr_waiters_locked() == 0); VJO_UNLOCK();
+    TEST_CHECK(vjoOcrRead(seq, &message) == 1 && result_waits == 2);
+    VJO_LOCK(); TEST_CHECK(game_ocr_waiters_locked() == 0); VJO_UNLOCK();
+    /* a read of a job already cancelled answers at once, as main did */
+    setup(); seq = submit(); caller = 3; TEST_CHECK(vjoOcrCancel(seq) == 0);
+    t0 = model_clock;
+    TEST_CHECK(vjoOcrRead(seq, &message) == VJO_ERR_CANCELLED && !result_waits && model_clock == t0);
+}
+
+static void game_suspends(void) { g.game_active = 0; }
+
+/* The count changes under the lock: right after the unlock before a wait it counts the
+ * caller, right after the unlock that follows the wait it no longer does. And the re-check
+ * after a wait sees what changed meanwhile: a suspend during a read's wait ends it CANCELLED
+ * at once, not one read later. */
+static void waiter_count_changes_under_the_lock(void)
+{
+    VjoGameOcrRequest r = {0};
+    setup(); caller = 7; record_unlocks = 1; unlock_count = 0;
+    TEST_CHECK(vjoOcrTake(&r) == 1);
+    record_unlocks = 0;
+    TEST_CHECK(unlock_count == 2 && unlock_waiters[0] == 1 && unlock_waiters[1] == 0);
+    TEST_MSG("take: %u unlocks, waiters %d then %d", unlock_count, unlock_waiters[0], unlock_waiters[1]);
+    setup(); uint32_t seq = submit(); take(seq); caller = 3; record_unlocks = 1; unlock_count = 0;
+    TEST_CHECK(vjoOcrRead(seq, &message) == 1);
+    record_unlocks = 0;
+    TEST_CHECK(unlock_count == 2 && unlock_waiters[0] == 1 && unlock_waiters[1] == 0);
+    TEST_MSG("read: %u unlocks, waiters %d then %d", unlock_count, unlock_waiters[0], unlock_waiters[1]);
+    setup(); seq = submit(); take(seq); caller = 3; during_event_wait = game_suspends;
+    uint64_t t0 = model_clock;
+    TEST_CHECK(vjoOcrRead(seq, &message) == VJO_ERR_CANCELLED && result_waits == 1 && model_clock - t0 == 50000);
+    setup(); caller = 7; during_event_wait = game_suspends;
+    TEST_CHECK(vjoOcrTake(&r) == VJO_ERR_PERM && job_waits == 1);
+}
+
+/* module_stop gives up when a waiter does not leave in time (kernel/main.c): the shutdown is
+ * undone, so the transport keeps working as before the attempt. */
+static void a_failed_stop_keeps_the_transport(void)
+{
+    VjoGameOcrRequest r = {0};
+    setup();
+    VJO_LOCK(); TEST_CHECK(game_ocr_shutdown_locked() == 0); VJO_UNLOCK();
+    caller = 7; TEST_CHECK(vjoOcrRegister() == VJO_ERR_NO_GAME && vjoOcrTake(&r) == VJO_ERR_PERM);
+    VJO_LOCK(); game_ocr_stop_failed_locked(); VJO_UNLOCK();
+    caller = 7; TEST_CHECK(vjoOcrRegister() == 0);
+    uint32_t seq = submit(); take(seq);
+    TEST_CHECK(vjoOcrComplete(&message) == 0);
+    caller = 3; TEST_CHECK(vjoOcrRead(seq, &message) == 0 && !strcmp(message.text, "猫"));
+    TEST_CHECK(locks == 0 && syscall_depth == 0);
 }
 
 static void registration_and_permissions(void)
@@ -1108,6 +1190,10 @@ static void modification_times_pack_distinctly(void)
 TEST_LIST = {
     {"hand-off: an idle take waits for a submission, bounded", take_wakes_on_submit},
     {"hand-off: a pending read waits for the completion, bounded", read_wakes_on_complete},
+    {"hand-off: a read waiting at a shutdown is counted and woken; every waited read gives its count back",
+     read_waiters_are_counted_and_woken},
+    {"hand-off: a failed module stop keeps the transport working", a_failed_stop_keeps_the_transport},
+    {"hand-off: the waiter count changes under the lock; the re-check sees a suspend", waiter_count_changes_under_the_lock},
     {"model syscalls wait for the kernel worker: Open Read32K Close each finish in one call", model_syscalls_wait_for_the_worker},
     {"model wait is bounded; BUSY still means repeat; a stale completion is re-checked", model_wait_is_bounded},
     {"Open reports the file modification time; a failed stat leaves it unknown and retryable", model_open_reports_modification_time},

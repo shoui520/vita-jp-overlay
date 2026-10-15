@@ -173,6 +173,11 @@ int game_ocr_waiters_locked(void)
     return waiters;
 }
 
+void game_ocr_stop_failed_locked(void)
+{
+    stopping = 0; /* module_stop gave up: the transport works as before the attempt */
+}
+
 void game_ocr_shell_changed_locked(void)
 {
     __atomic_add_fetch(&g.ocr_epoch, 1, __ATOMIC_RELEASE);

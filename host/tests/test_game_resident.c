@@ -101,14 +101,14 @@ int vjoOcrRegister(void) { return registered_rc; }
  * take_job: the first call claims a job (an empty request: the worker refuses it
  * at once and completes it); take_quit: the worker stops after this many calls. */
 static unsigned take_calls, take_wait_us, take_quit;
-static int take_job;
+static int take_job, take_perm; /* take_perm: every take answers PERM (the game stopped being the active one) */
 int vjoOcrTake(VjoGameOcrRequest *out)
 {
     take_calls++;
     if (take_quit && take_calls >= take_quit) quitting = 1;
     if (take_job && take_calls == 1) { memset(out, 0, sizeof(*out)); return 0; }
     clock_value += take_wait_us;
-    return 1;
+    return take_perm ? VJO_ERR_PERM : 1;
 }
 int vjoOcrCancelled(uint32_t seq)
 { return cancel_now || (cancel_after_reads && reads >= (unsigned)cancel_after_reads); }
@@ -216,7 +216,7 @@ static void reset(void)
     job_live = weights_live = job_alloc_failure = weights_alloc_failure = weights_free_failure = 0;
     job_allocs = job_frees = weights_allocs = weights_frees = 0;
     registered_rc = quit_after_delay = cancel_now = cancel_at_open = cancel_after_reads = 0;
-    take_calls = take_wait_us = take_quit = 0; take_job = 0; complete_failures = 0;
+    take_calls = take_wait_us = take_quit = 0; take_job = take_perm = 0; complete_failures = 0;
     open_failure = size_delta = stat_failure = corrupt = 0; mtime = 0x12345678;
     opens = closes = reads = bytes_read = loads = delays = 0; file_open_now = 0;
     spy_lines = 1; free_query_error = 0;
@@ -412,6 +412,14 @@ static void worker_loop_keeps_its_pace(void)
     worker_main(0, NULL);
     TEST_CHECK(take_calls == 2 && delays == 2 && !claim_outstanding);
     TEST_MSG("%u takes, %u sleeps", take_calls, delays);
+    /* a take the kernel held and then refused (the game stopped being the active one during the
+     * wait): the next round at once, as after any held take; refused at once: the 100 ms sleep */
+    reset(); take_quit = 3; take_wait_us = 100000; take_perm = 1;
+    worker_main(0, NULL);
+    TEST_CHECK(take_calls == 3 && delays == 0);
+    reset(); take_quit = 3; take_perm = 1;
+    worker_main(0, NULL);
+    TEST_CHECK(take_calls == 3 && delays == 3);
     /* a wait cut short (a job submitted and cancelled before it was taken): the 100 ms sleep */
     reset(); take_quit = 2; take_wait_us = 20000;
     worker_main(0, NULL);

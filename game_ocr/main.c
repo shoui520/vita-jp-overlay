@@ -1074,10 +1074,12 @@ done:
     return rc;
 }
 
-/* An idle vjoOcrTake that returns 1 after this long waited in the kernel for a
- * job (kernel/game_ocr.c TAKE_WAIT_US, 100 ms): the worker asks again at once.
- * One that returns sooner (a kernel that does not wait) is followed by the
- * worker's own 100 ms sleep, as before, so the loop never spins. */
+/* A vjoOcrTake the kernel held for at least this long, waiting for a job
+ * (kernel/game_ocr.c TAKE_WAIT_US, 100 ms), is followed by the next round at
+ * once, whatever it answered (none came, or the game stopped being the active
+ * one meanwhile: the next Register sees it). One that answers sooner (a job,
+ * an error, a kernel that does not wait) is followed by the worker's own
+ * 100 ms sleep, as before, so the loop never spins. */
 #define TAKE_WAITED_US 50000u
 
 static int worker_main(SceSize args, void *argp)
@@ -1101,8 +1103,8 @@ static int worker_main(SceSize args, void *argp)
                     vjo_game_ocr_run_request(&request, &pending_result);
                     if (!vjoOcrComplete(&pending_result) && !pending_result.cleanup_status) claim_outstanding = 0;
                     nap = claim_outstanding; /* done: the next job may be queued already */
-                } else if (took == 1 && now_wide() - asked >= TAKE_WAITED_US) {
-                    nap = 0; /* the kernel waited for a job: none came */
+                } else if (now_wide() - asked >= TAKE_WAITED_US) {
+                    nap = 0; /* the kernel held the take: its wait was the pace */
                 }
             } else if (registered != VJO_ERR_BUSY &&
                        (resident.data || weights_uid >= 0 || lm_res.data || lm_uid >= 0 || cascade_res.data ||
