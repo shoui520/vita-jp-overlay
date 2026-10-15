@@ -44,14 +44,32 @@ static unsigned char user_rows[64 * 64]; /* the worker's capture block */
 void klog(const char *format, ...) { (void)format; }
 SceUID ksceKernelGetProcessId(void) { return caller; }
 uint64_t ksceKernelGetSystemTimeWide(void) { return model_clock; }
+/* MEV_JOB and MEV_RESULT as the event flag holds them, and what runs on another
+ * thread while vjoOcrTake or vjoOcrRead waits for them (the Shell's submission, the
+ * game's completion, a cancellation). */
+static int job_bit, result_bit;
+static unsigned job_events, result_events, job_waits, result_waits;
+static void (*during_event_wait)(void);
 int ksceKernelSetEventFlag(SceUID uid, unsigned bits)
 {
     if (uid == g.mevf && g.mevf > 0 && bits == MEV_ROWS) { rows_events++; return 0; }
+    if (uid == g.mevf && g.mevf > 0 && (bits & (MEV_JOB | MEV_RESULT)) && !(bits & ~(MEV_JOB | MEV_RESULT))) {
+        TEST_CHECK(locks == 1);
+        if (bits & MEV_JOB) { job_events++; job_bit = 1; }
+        if (bits & MEV_RESULT) { result_events++; result_bit = 1; }
+        return 0;
+    }
     if (uid == g.mevf && g.mevf > 0) { TEST_CHECK(bits == MEV_DONE); done_events++; done_pending = 1; return 0; }
     if (uid == g.evf && bits == VJO_EV_CAPTURE_DONE) { capture_events++; return 0; }
     TEST_CHECK(uid == g.ievf && bits == IEV_MODEL); model_events++; return 0;
 }
-int ksceKernelClearEventFlag(SceUID uid, unsigned bits) { TEST_CHECK(uid == g.mevf && bits == ~MEV_ROWS); return 0; }
+int ksceKernelClearEventFlag(SceUID uid, unsigned bits)
+{
+    TEST_CHECK(uid == g.mevf && (bits == ~MEV_ROWS || bits == ~MEV_JOB || bits == ~MEV_RESULT));
+    if (bits == ~MEV_JOB) { TEST_CHECK(locks == 1); job_bit = 0; } /* cleared under the lock: no lost wakeup */
+    if (bits == ~MEV_RESULT) { TEST_CHECK(locks == 1); result_bit = 0; }
+    return 0;
+}
 int ksceKernelDelayThread(SceUInt us) { model_clock += us; return 0; }
 SceUID ksceKernelFindMemBlockByAddr(const void *addr, SceSize size) { (void)addr; (void)size; return 40; }
 /* The worker's memory: only its capture block counts as a block of process 7. */
@@ -86,6 +104,21 @@ int ksceKernelWaitEventFlag(SceUID uid, unsigned bits, unsigned wait, unsigned *
             if (out) *out = MEV_ROWS;
             return 0;
         }
+        model_clock += *timeout;
+        return SCE_KERNEL_ERROR_WAIT_TIMEOUT;
+    }
+    if (bits == MEV_JOB || bits == MEV_RESULT) { /* vjoOcrTake / vjoOcrRead, without the lock */
+        int *bit = bits == MEV_JOB ? &job_bit : &result_bit;
+        TEST_ASSERT(uid == g.mevf && !locks && syscall_depth == 1 && timeout);
+        TEST_CHECK(wait == (SCE_EVENT_WAITOR | SCE_EVENT_WAITCLEAR_PAT));
+        TEST_CHECK(*timeout == (bits == MEV_JOB ? 100000u : 50000u));
+        if (bits == MEV_JOB) job_waits++; else result_waits++;
+        if (during_event_wait) { /* another thread's syscall meanwhile */
+            void (*fn)(void) = during_event_wait;
+            SceUID saved = caller; unsigned depth = syscall_depth;
+            during_event_wait = NULL; syscall_depth = 0; fn(); caller = saved; syscall_depth = depth;
+        }
+        if (*bit) { *bit = 0; if (out) *out = bits; return 0; }
         model_clock += *timeout;
         return SCE_KERNEL_ERROR_WAIT_TIMEOUT;
     }
@@ -233,6 +266,7 @@ static void setup(void)
     model_opens = model_reads = model_closes = model_events = 0;
     file_live = open_error = seek_error = read_error = close_error = eof = short_read = bad_size = during_io = 0;
     done_events = waits = stats = 0; done_pending = wait_runs_worker = stat_error = 0; expect_fallback = 0; expect_lm = NULL;
+    job_bit = result_bit = 0; job_events = result_events = job_waits = result_waits = 0; during_event_wait = NULL;
     memset(&file_stat, 0, sizeof(file_stat));
     file_stat.st_mtime = (SceDateTime){2026, 10, 11, 9, 43, 58, 123456};
     TEST_ASSERT(vjoOcrRegister() == 0);
@@ -268,6 +302,91 @@ static void take(uint32_t seq)
     memset(&message, 0, sizeof(message));
     message.size = sizeof(message); message.seq = seq;
     strcpy(message.text, "猫");
+}
+
+/* The hand-off without polls: an idle vjoOcrTake waits (once, at most 100 ms,
+ * without the lock) for vjoOcrSubmit's MEV_JOB, a pending vjoOcrRead (once, at
+ * most 50 ms) for vjoOcrComplete's MEV_RESULT. A job or result already there
+ * is answered without waiting; the bit is cleared under the lock first, so one
+ * set while the caller is between its check and its wait is not lost. */
+static void shell_submits(void) { VjoGameOcrRequest r = make_request(); caller = 3; TEST_CHECK(vjoOcrSubmit(&r) > 0); }
+static void game_completes(void) { caller = 7; TEST_CHECK(vjoOcrComplete(&message) == 0); }
+static void shell_cancels(void) { caller = 3; TEST_CHECK(vjoOcrCancel(request.seq) == 0); }
+static void game_exits(void) { game_ocr_process_gone(7); }
+static int waiters_seen;
+static void module_stops(void) /* module_stop's shutdown, on another thread */
+{
+    waiters_seen = waiters;
+    VJO_LOCK(); TEST_CHECK(game_ocr_shutdown_locked() == 0); VJO_UNLOCK();
+}
+
+static void take_wakes_on_submit(void)
+{
+    VjoGameOcrRequest r = {0};
+    setup(); caller = 7;
+    uint64_t t0 = model_clock;
+    TEST_CHECK(vjoOcrTake(&r) == 1 && job_waits == 1); /* idle: one bounded wait, then 1 */
+    TEST_CHECK(model_clock - t0 == 100000);
+    /* a submission while the game worker waits: claimed at once, no timeout passes */
+    t0 = model_clock; during_event_wait = shell_submits; caller = 7;
+    TEST_CHECK(vjoOcrTake(&r) == 0 && job_waits == 2 && job_events == 1);
+    TEST_CHECK(model_clock == t0 && r.seq == request.seq && claimed && !pending);
+    TEST_CHECK(locks == 0 && syscall_depth == 0);
+    /* claimed: BUSY at once, no wait */
+    TEST_CHECK(vjoOcrTake(&r) == VJO_ERR_BUSY && job_waits == 2);
+    /* a job already queued: no wait */
+    setup(); uint32_t seq = submit(); caller = 7;
+    TEST_CHECK(vjoOcrTake(&r) == 0 && r.seq == seq && job_waits == 0);
+    /* an older job's bit left set never makes an idle take skip its wait */
+    setup(); seq = submit(); take(seq); TEST_CHECK(vjoOcrComplete(&message) == 0);
+    TEST_CHECK(job_bit == 1); /* nobody waited for that submission */
+    t0 = model_clock;
+    TEST_CHECK(vjoOcrTake(&r) == 1 && job_waits == 1 && model_clock - t0 == 100000);
+    /* the module stopping while the worker waits: the shutdown wakes it, it leaves at once, and
+     * module_stop sees no thread inside the wait any more */
+    setup(); caller = 7; during_event_wait = module_stops; t0 = model_clock;
+    TEST_CHECK(vjoOcrTake(&r) == VJO_ERR_PERM && waiters_seen == 1 && model_clock == t0);
+    VJO_LOCK(); TEST_CHECK(game_ocr_waiters_locked() == 0); VJO_UNLOCK();
+    TEST_CHECK(locks == 0 && syscall_depth == 0);
+    /* not the registered, current worker: refused without waiting */
+    setup(); caller = 8;
+    TEST_CHECK(vjoOcrTake(&r) == VJO_ERR_PERM && !job_waits);
+    caller = 7; g.game_active = 0;
+    TEST_CHECK(vjoOcrTake(&r) == VJO_ERR_PERM && !job_waits);
+}
+
+static void read_wakes_on_complete(void)
+{
+    setup(); uint32_t seq = submit(); take(seq);
+    caller = 3;
+    uint64_t t0 = model_clock;
+    TEST_CHECK(vjoOcrRead(seq, &message) == 1 && result_waits == 1 && model_clock - t0 == 50000);
+    /* the game completes while the Shell waits: the result at once */
+    memset(&message, 0, sizeof(message)); message.size = sizeof(message); message.seq = seq; strcpy(message.text, "猫");
+    t0 = model_clock; during_event_wait = game_completes; caller = 3;
+    TEST_CHECK(vjoOcrRead(seq, &message) == 0 && !strcmp(message.text, "猫"));
+    TEST_CHECK(result_waits == 2 && result_events == 1 && model_clock == t0);
+    TEST_CHECK(locks == 0 && syscall_depth == 0);
+    /* completed already: no wait */
+    caller = 3; TEST_CHECK(vjoOcrRead(seq, &message) == 0 && result_waits == 2);
+    /* cancelled while the Shell waits (its own cancel, the game's exit): CANCELLED after the wait */
+    setup(); seq = submit(); take(seq);
+    during_event_wait = shell_cancels; caller = 3;
+    TEST_CHECK(vjoOcrRead(seq, &message) == VJO_ERR_CANCELLED && result_waits == 1);
+    setup(); seq = submit(); take(seq);
+    during_event_wait = game_exits; caller = 3;
+    TEST_CHECK(vjoOcrRead(seq, &message) == VJO_ERR_CANCELLED);
+    /* an earlier job's result bit, left set (no read was waiting), never cuts a later read's wait short */
+    setup(); seq = submit(); take(seq); TEST_CHECK(vjoOcrComplete(&message) == 0); TEST_CHECK(result_bit == 1);
+    uint32_t next = submit(); take(next); caller = 3; t0 = model_clock;
+    TEST_CHECK(vjoOcrRead(next, &message) == 1 && result_waits == 1 && model_clock - t0 == 50000);
+    /* a read waits only for a queued or claimed job, which refuses the shutdown (module_stop fails then) */
+    setup(); seq = submit(); caller = 3;
+    VJO_LOCK(); TEST_CHECK(game_ocr_shutdown_locked() == VJO_ERR_BUSY && !game_ocr_waiters_locked()); VJO_UNLOCK();
+    /* a stale or foreign read: refused without waiting */
+    setup(); seq = submit(); caller = 3;
+    TEST_CHECK(vjoOcrRead(seq + 1, &message) == VJO_ERR_ARG && !result_waits);
+    caller = 4; TEST_CHECK(vjoOcrRead(seq, &message) == VJO_ERR_PERM && !result_waits);
 }
 
 static void registration_and_permissions(void)
@@ -987,6 +1106,8 @@ static void modification_times_pack_distinctly(void)
 }
 
 TEST_LIST = {
+    {"hand-off: an idle take waits for a submission, bounded", take_wakes_on_submit},
+    {"hand-off: a pending read waits for the completion, bounded", read_wakes_on_complete},
     {"model syscalls wait for the kernel worker: Open Read32K Close each finish in one call", model_syscalls_wait_for_the_worker},
     {"model wait is bounded; BUSY still means repeat; a stale completion is re-checked", model_wait_is_bounded},
     {"Open reports the file modification time; a failed stat leaves it unknown and retryable", model_open_reports_modification_time},

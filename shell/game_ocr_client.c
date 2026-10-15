@@ -9,6 +9,11 @@
  * then is the worker taken for unavailable. */
 #define SUBMIT_RETRY_US 20000u
 #define SUBMIT_BUSY_US 2000000
+/* The result is asked for every READ_PERIOD_US. A kernel that waits for it
+ * (kernel/game_ocr.c READ_WAIT_US) answers a pending read only after that long,
+ * and the result as soon as the game completes it: then no sleep follows. One
+ * that answers at once is followed by the rest of the period here, as before. */
+#define READ_PERIOD_US 50000
 
 int vjo_game_ocr_exchange(const VjoGameOcrClient *client,
                           const VjoGameOcrRequest *request,
@@ -39,6 +44,7 @@ int vjo_game_ocr_exchange(const VjoGameOcrClient *client,
         memset(result, 0, sizeof(*result));
         result->size = sizeof(*result);
         rc = client->read(client->ud, (uint32_t)seq, result);
+        int64_t spent = client->now_us(client->ud) - now;
         if (!rc) {
             if (result->size != sizeof(*result) || result->seq != (uint32_t)seq ||
                 !memchr(result->text, 0, sizeof(result->text)) || result->rc > 0 ||
@@ -52,7 +58,8 @@ int vjo_game_ocr_exchange(const VjoGameOcrClient *client,
             return rc;
         }
         if (rc != 1) { rc = VJO_E_CANCELLED; break; }
-        client->delay_us(client->ud, 50000);
+        if (spent < READ_PERIOD_US / 2) /* the kernel did not wait: never spin */
+            client->delay_us(client->ud, (uint32_t)(READ_PERIOD_US - (spent > 0 ? spent : 0)));
     }
     client->cancel(client->ud, (uint32_t)seq);
     memset(result->text, 0, sizeof(result->text));

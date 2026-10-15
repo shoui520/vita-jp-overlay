@@ -69,14 +69,24 @@ int vjoOcrModelClose(uint32_t seq)
 void klog(const char *format, ...) { (void)format; }
 SceUID ksceKernelGetProcessId(void) { return caller; }
 uint64_t ksceKernelGetSystemTimeWide(void) { return clock_us; }
+/* vjoOcrSubmit's MEV_JOB and vjoOcrComplete's MEV_RESULT (a waiting Take or Read returns at once). */
+static int job_bit, result_bit;
 int ksceKernelSetEventFlag(SceUID uid, unsigned bits)
 {
     if (g.mevf > 0 && uid == g.mevf && bits == MEV_ROWS) return 0;
+    if (g.mevf > 0 && uid == g.mevf && bits == MEV_JOB) { job_bit = 1; return 0; }
+    if (g.mevf > 0 && uid == g.mevf && bits == MEV_RESULT) { result_bit = 1; return 0; }
     if (g.mevf > 0 && uid == g.mevf) { TEST_CHECK(bits == MEV_DONE); done_pending = 1; return 0; }
     if (uid == g.evf && bits == VJO_EV_CAPTURE_DONE) return 0;
     TEST_CHECK(uid == g.ievf && bits == IEV_MODEL); return 0;
 }
-int ksceKernelClearEventFlag(SceUID uid, unsigned bits) { TEST_CHECK(uid == g.mevf && bits == ~MEV_ROWS); return 0; }
+int ksceKernelClearEventFlag(SceUID uid, unsigned bits)
+{
+    TEST_CHECK(uid == g.mevf && (bits == ~MEV_ROWS || bits == ~MEV_JOB || bits == ~MEV_RESULT));
+    if (bits == ~MEV_JOB) job_bit = 0;
+    if (bits == ~MEV_RESULT) result_bit = 0;
+    return 0;
+}
 int ksceKernelDelayThread(SceUInt us) { clock_us += us; return 0; }
 SceUID ksceKernelFindMemBlockByAddr(const void *addr, SceSize size) { return 40; }
 /* Only the worker's capture block is memory of the game process 7. */
@@ -97,6 +107,13 @@ int ksceKernelWaitEventFlag(SceUID uid, unsigned bits, unsigned wait, unsigned *
         game_ocr_rows_hook(7, (uintptr_t)pixels, 200, 0x00000000u, 200, 60);
         in_hook = 0;
         return 0;
+    }
+    if (bits == MEV_JOB || bits == MEV_RESULT) { /* an idle Take, a pending Read: the bit, or the timeout */
+        int *bit = bits == MEV_JOB ? &job_bit : &result_bit;
+        TEST_ASSERT(uid == g.mevf && !locks && syscall_depth == 1 && timeout);
+        if (*bit) { *bit = 0; return 0; }
+        clock_us += *timeout;
+        return SCE_KERNEL_ERROR_WAIT_TIMEOUT;
     }
     TEST_ASSERT(uid == g.mevf && bits == MEV_DONE && !locks && syscall_depth == 1 && timeout);
     kernel_wait_calls++;

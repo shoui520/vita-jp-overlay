@@ -603,6 +603,16 @@ int module_stop(SceSize argc, const void *args)
     int busy = game_ocr_shutdown_locked();
     VJO_UNLOCK();
     if (busy) return SCE_KERNEL_STOP_FAIL;
+    /* A game worker's take waiting for a job (at most 100 ms) was woken by the
+     * shutdown: it leaves the module's code before the module goes. */
+    for (int i = 0;; i++) {
+        VJO_LOCK();
+        busy = game_ocr_waiters_locked();
+        VJO_UNLOCK();
+        if (!busy) break;
+        if (i >= 200) return SCE_KERNEL_STOP_FAIL;
+        ksceKernelDelayThread(1000);
+    }
     worker_run = 0;
     if (worker_uid >= 0) {
         ksceKernelSetEventFlag(g.ievf, IEV_QUIT);

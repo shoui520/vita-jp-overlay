@@ -6,12 +6,18 @@
 
 /* All *_locked helpers require g.lock. No helper takes g.game_lock. */
 /* g.mevf bits: the kernel worker finished a model operation; the display hook
- * finished an armed vjoOcrCaptureRows. */
+ * finished an armed vjoOcrCaptureRows; vjoOcrSubmit queued a job (the game
+ * worker's vjoOcrTake waits for it); vjoOcrComplete published a result (the
+ * Shell's vjoOcrRead waits for it). */
 #define MEV_DONE 0x1u
 #define MEV_ROWS 0x2u
+#define MEV_JOB 0x4u
+#define MEV_RESULT 0x8u
 void game_ocr_init(void);
 int game_ocr_capture_busy_locked(void);
 int game_ocr_shutdown_locked(void);
+/* Threads still inside vjoOcrTake's or vjoOcrRead's wait (module_stop waits for 0). */
+int game_ocr_waiters_locked(void);
 void game_ocr_shell_changed_locked(void);
 void game_ocr_foreground_changed_locked(void);
 /* The registered game worker's process (0: none), for vjoMemInfo's caller check. */

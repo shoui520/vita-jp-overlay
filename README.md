@@ -456,6 +456,10 @@ in `ux0:data/VitaJPOverlay/ocr`, checks
 their lengths, reports their modification time, and copies at most 32 KiB per
 request into game-owned memory. Each model call waits (at most 50 ms, without
 the kernel lock) for the kernel worker instead of polling with a 1 ms sleep.
+A job is handed over the same way: the game worker's take waits (at most
+100 ms) for the Shell's submission and the Shell's read (at most 50 ms) for the
+game's result, so neither waits for the other's next poll (a 100 ms and a
+50 ms one before, 75 ms a job on average).
 The game then checks SHA-256 and runs inference. The kernel holds one 32 KiB
 staging buffer, no complete model, and no saved game pointers. Cancellation or
 process exit drains any file operation before the next job can reuse its slot.

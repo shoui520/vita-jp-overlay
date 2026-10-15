@@ -15,6 +15,9 @@ static VjoGameOcrResult result, incoming; /* Never put a 4 KiB result on syscall
 static SceUID worker_pid, worker_module, request_pid, request_shell;
 static uint32_t worker_epoch, request_epoch, sequence;
 static int valid, pending, claimed, cancelled, completed, stopping;
+/* Threads inside vjoOcrTake's or vjoOcrRead's wait (under g.lock): module_stop
+ * wakes them and waits until they have left before the module goes. */
+static int waiters;
 
 enum { MODEL_IDLE, MODEL_QUEUED, MODEL_RUNNING, MODEL_DONE };
 enum { MODEL_OPEN = 1, MODEL_READ, MODEL_CLOSE };
@@ -64,6 +67,22 @@ static struct {
 /* A model syscall waits this long for the kernel worker before answering
  * BUSY; the game then yields and repeats it, as before. */
 #define MODEL_SYSCALL_WAIT_US 50000u
+/* With no job queued, the game worker's vjoOcrTake waits this long for one
+ * (MEV_JOB) before answering 1, so a job is claimed when it is submitted, not
+ * at the worker's next 100 ms poll; with no result yet, the Shell's vjoOcrRead
+ * waits this long for it (MEV_RESULT). One wait each, without the lock; the
+ * periods match the polls they replace, so a caller's loop keeps its pace. */
+#define TAKE_WAIT_US 100000u
+#define READ_WAIT_US 50000u
+
+/* Waits for bits of g.mevf for at most us, without g.lock (the caller cleared
+ * them under the lock when it saw nothing to take). */
+static void event_wait(unsigned int bits, SceUInt us)
+{
+    unsigned int out = 0;
+    SceUInt timeout = us;
+    ksceKernelWaitEventFlag(g.mevf, bits, SCE_EVENT_WAITOR | SCE_EVENT_WAITCLEAR_PAT, &out, &timeout);
+}
 
 static void model_reset_locked(void)
 {
@@ -122,6 +141,7 @@ void game_ocr_init(void)
     worker_pid = worker_module = request_pid = request_shell = 0;
     worker_epoch = request_epoch = sequence = 0;
     valid = pending = claimed = cancelled = completed = stopping = 0;
+    waiters = 0;
     model_reset_locked();
     memset(&rows, 0, sizeof(rows));
 }
@@ -143,7 +163,14 @@ int game_ocr_shutdown_locked(void)
     if (pending || claimed || model_io.seq || rows.state != ROWS_IDLE) return VJO_ERR_BUSY;
     stopping = 1;
     invalidate_locked();
+    /* a take or read waiting in the kernel wakes, finds the worker stopping and leaves */
+    if (waiters && g.mevf > 0) ksceKernelSetEventFlag(g.mevf, MEV_JOB | MEV_RESULT);
     return 0;
+}
+
+int game_ocr_waiters_locked(void)
+{
+    return waiters;
 }
 
 void game_ocr_shell_changed_locked(void)
@@ -277,6 +304,7 @@ int vjoOcrSubmit(const VjoGameOcrRequest *user_request)
         valid = pending = 1;
         claimed = cancelled = completed = 0;
         rc = (int)request.seq;
+        if (g.mevf > 0) ksceKernelSetEventFlag(g.mevf, MEV_JOB); /* a waiting vjoOcrTake claims it now */
         klog("ocr job %u: %ux%u at %u,%u of %ux%u, capture %u, flags 0x%X, %s / %s", request.seq,
              request.width, request.height, request.x, request.y, fw, fh, request.capture_seq,
              request.flags, request.model, request.fallback[0] ? request.fallback : "-");
@@ -291,17 +319,31 @@ int vjoOcrTake(VjoGameOcrRequest *out)
 {
     uint32_t state;
     SceUID pid = ksceKernelGetProcessId();
-    int rc;
+    int rc, waited = 0;
     ENTER_SYSCALL(state);
-    VJO_LOCK();
-    sync_locked();
-    if (!registration_current(pid)) rc = VJO_ERR_PERM;
-    else if (claimed) rc = VJO_ERR_BUSY;
-    else if (!pending || !valid || cancelled) rc = 1;
-    else if (!out || ksceKernelMemcpyKernelToUser(out, &request, sizeof(request)) < 0)
-        rc = VJO_ERR_COPY;
-    else { pending = 0; claimed = 1; rc = 0; }
-    VJO_UNLOCK();
+    for (;;) {
+        int wait;
+        VJO_LOCK();
+        if (waited) waiters--;
+        sync_locked();
+        if (!registration_current(pid)) rc = VJO_ERR_PERM;
+        else if (claimed) rc = VJO_ERR_BUSY;
+        else if (!pending || !valid || cancelled) rc = 1;
+        else if (!out || ksceKernelMemcpyKernelToUser(out, &request, sizeof(request)) < 0)
+            rc = VJO_ERR_COPY;
+        else { pending = 0; claimed = 1; rc = 0; }
+        /* Nothing queued: wait once. The bit is cleared under the lock, so a
+         * vjoOcrSubmit after this point wakes the wait. */
+        wait = rc == 1 && !waited && g.mevf > 0;
+        if (wait) {
+            ksceKernelClearEventFlag(g.mevf, ~MEV_JOB);
+            waiters++;
+        }
+        VJO_UNLOCK();
+        if (!wait) break;
+        waited = 1;
+        event_wait(MEV_JOB, TAKE_WAIT_US);
+    }
     EXIT_SYSCALL(state);
     return rc;
 }
@@ -568,6 +610,7 @@ int vjoOcrComplete(const VjoGameOcrResult *user_result)
         if (!cancelled) {
             result = incoming;
             completed = 1;
+            if (g.mevf > 0) ksceKernelSetEventFlag(g.mevf, MEV_RESULT); /* a waiting vjoOcrRead returns it now */
         }
         if (!incoming.cleanup_status) claimed = 0;
         /* Failed cleanup retains the claim and may be retried. Completed
@@ -583,19 +626,31 @@ int vjoOcrRead(uint32_t seq, VjoGameOcrResult *out)
 {
     uint32_t state;
     SceUID pid = ksceKernelGetProcessId();
-    int rc;
+    int rc, waited = 0;
     if (!shell_caller(pid)) return VJO_ERR_PERM;
     ENTER_SYSCALL(state);
-    VJO_LOCK();
-    sync_locked();
-    if (!shell_caller(pid)) rc = VJO_ERR_PERM;
-    else if (!valid || seq != request.seq || request_shell != pid) rc = VJO_ERR_ARG;
-    else if (cancelled) rc = VJO_ERR_CANCELLED;
-    else if (!completed) rc = 1;
-    else if (!out || ksceKernelMemcpyKernelToUser(out, &result, sizeof(result)) < 0)
-        rc = VJO_ERR_COPY;
-    else rc = 0;
-    VJO_UNLOCK();
+    for (;;) {
+        int wait;
+        VJO_LOCK();
+        if (waited) waiters--;
+        sync_locked();
+        if (!shell_caller(pid)) rc = VJO_ERR_PERM;
+        else if (!valid || seq != request.seq || request_shell != pid) rc = VJO_ERR_ARG;
+        else if (cancelled) rc = VJO_ERR_CANCELLED;
+        else if (!completed) rc = 1;
+        else if (!out || ksceKernelMemcpyKernelToUser(out, &result, sizeof(result)) < 0)
+            rc = VJO_ERR_COPY;
+        else rc = 0;
+        wait = rc == 1 && !waited && g.mevf > 0; /* as vjoOcrTake */
+        if (wait) {
+            ksceKernelClearEventFlag(g.mevf, ~MEV_RESULT);
+            waiters++;
+        }
+        VJO_UNLOCK();
+        if (!wait) break;
+        waited = 1;
+        event_wait(MEV_RESULT, READ_WAIT_US);
+    }
     EXIT_SYSCALL(state);
     return rc;
 }

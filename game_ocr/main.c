@@ -1074,22 +1074,35 @@ done:
     return rc;
 }
 
+/* An idle vjoOcrTake that returns 1 after this long waited in the kernel for a
+ * job (kernel/game_ocr.c TAKE_WAIT_US, 100 ms): the worker asks again at once.
+ * One that returns sooner (a kernel that does not wait) is followed by the
+ * worker's own 100 ms sleep, as before, so the loop never spins. */
+#define TAKE_WAITED_US 50000u
+
 static int worker_main(SceSize args, void *argp)
 {
     (void)args; (void)argp;
     while (!__atomic_load_n(&quitting, __ATOMIC_ACQUIRE) && !blocked) {
+        int nap = 1;
         if (claim_outstanding) {
             if (!vjoOcrComplete(&pending_result) && !pending_result.cleanup_status) claim_outstanding = 0;
         } else {
             int registered = vjoOcrRegister();
             if (!registered) {
                 static VjoGameOcrRequest request; /* not on the 32 KiB stack */
+                uint64_t asked = now_wide();
+                int took;
                 sceClibMemset(&request, 0, sizeof(request));
                 request.size = sizeof(request);
-                if (!vjoOcrTake(&request)) {
+                took = vjoOcrTake(&request);
+                if (!took) {
                     claim_outstanding = 1;
                     vjo_game_ocr_run_request(&request, &pending_result);
                     if (!vjoOcrComplete(&pending_result) && !pending_result.cleanup_status) claim_outstanding = 0;
+                    nap = claim_outstanding; /* done: the next job may be queued already */
+                } else if (took == 1 && now_wide() - asked >= TAKE_WAITED_US) {
+                    nap = 0; /* the kernel waited for a job: none came */
                 }
             } else if (registered != VJO_ERR_BUSY &&
                        (resident.data || weights_uid >= 0 || lm_res.data || lm_uid >= 0 || cascade_res.data ||
@@ -1100,7 +1113,7 @@ static int worker_main(SceSize args, void *argp)
                 blocked = 1;
             }
         }
-        sceKernelDelayThread(claim_outstanding ? 50000 : 100000);
+        if (nap) sceKernelDelayThread(claim_outstanding ? 50000 : 100000);
     }
     return 0;
 }

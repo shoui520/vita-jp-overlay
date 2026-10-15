@@ -7,6 +7,7 @@ typedef struct {
     int submit_rc, read_rc, cancelled, malformed, cleanup, engine_rc;
     int submits, reads, cancels, delays, ready_after, abort_after;
     int busy, cancel_when_busy; /* the first `busy` submissions answer BUSY */
+    int read_wait_us; /* a pending read returns after this long (a kernel that waits for the result) */
     int64_t time;
     const char *text;
 } Fake;
@@ -22,7 +23,7 @@ static int read_result(void *ud, uint32_t seq, VjoGameOcrResult *out) {
     Fake *f = ud; f->reads++;
     TEST_CHECK(seq == (uint32_t)f->submit_rc);
     if (f->read_rc) { memset(out, 0xA5, sizeof(*out)); return f->read_rc; }
-    if (f->reads <= f->ready_after) return 1;
+    if (f->reads <= f->ready_after) { f->time += f->read_wait_us; return 1; }
     out->size = sizeof(*out); out->seq = seq; out->rc = f->engine_rc;
     out->cleanup_status = f->cleanup;
     memset(out->text, 0xA5, sizeof(out->text));
@@ -103,8 +104,24 @@ static void busy_submission_is_repeated_within_its_time(void) {
     f = (Fake){.submit_rc = 17, .busy = 1000, .cancel_when_busy = 1};
     TEST_CHECK(exchange(&f, &out) == VJO_E_CANCELLED && f.submits == 1 && !f.reads && !f.cancels);
 }
+/* A kernel that waits for the result (kernel/game_ocr.c READ_WAIT_US) paces the
+ * reads itself: no sleep follows its pending answers, and the timeout and a
+ * cancellation still end the exchange. One whose wait was cut short (the
+ * result's bit from an earlier job) is followed by the rest of the 50 ms. */
+static void waiting_kernel_paces_the_reads(void) {
+    Fake f = {.submit_rc = 17, .ready_after = 2, .read_wait_us = 50000}; VjoGameOcrResult out;
+    TEST_CHECK(exchange(&f, &out) == 0 && !strcmp(out.text, "test"));
+    TEST_CHECK(f.reads == 3 && f.delays == 0 && f.time == 100000);
+    f = (Fake){.submit_rc = 9, .ready_after = 99, .read_wait_us = 50000};
+    TEST_CHECK(exchange(&f, &out) == VJO_E_OCR_INFERENCE && f.reads == 3 && !f.delays && f.time == 150000);
+    f = (Fake){.submit_rc = 9, .ready_after = 99, .read_wait_us = 50000, .abort_after = 2};
+    TEST_CHECK(exchange(&f, &out) == VJO_E_CANCELLED && f.reads == 2 && !f.delays);
+    f = (Fake){.submit_rc = 17, .ready_after = 2, .read_wait_us = 10000};
+    TEST_CHECK(exchange(&f, &out) == 0 && f.delays == 2 && f.time == 2 * 50000);
+}
 TEST_LIST = {
     {"completed worker", successful}, {"missing worker", refuses_missing_worker},
+    {"a waiting kernel paces the reads", waiting_kernel_paces_the_reads},
     {"bounded timeout", timeout_keeps_worker_cleanup_separate},
     {"cancellation", cancellation}, {"stale and incomplete", rejects_stale_and_incomplete_results},
     {"cleanup and engine failure", refuses_unclean_or_failed_engine},

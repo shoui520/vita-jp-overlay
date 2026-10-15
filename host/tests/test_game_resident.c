@@ -96,10 +96,29 @@ SceUID sceIoOpen(const char *path, int flags, unsigned mode) { return (int)0x800
 int vjoGetVersion(void) { return VJO_API_VERSION; }
 int vjoBootInfo(VjoBootInfo *out) { out->mode = VJO_BOOT_NORMAL; return 0; }
 int vjoOcrRegister(void) { return registered_rc; }
-int vjoOcrTake(VjoGameOcrRequest *out) { return 1; }
+/* take_wait_us: the kernel's idle vjoOcrTake waits this long for a job before
+ * answering 1 (100 ms since the hand-off waits; 0: an older kernel, at once);
+ * take_job: the first call claims a job (an empty request: the worker refuses it
+ * at once and completes it); take_quit: the worker stops after this many calls. */
+static unsigned take_calls, take_wait_us, take_quit;
+static int take_job;
+int vjoOcrTake(VjoGameOcrRequest *out)
+{
+    take_calls++;
+    if (take_quit && take_calls >= take_quit) quitting = 1;
+    if (take_job && take_calls == 1) { memset(out, 0, sizeof(*out)); return 0; }
+    clock_value += take_wait_us;
+    return 1;
+}
 int vjoOcrCancelled(uint32_t seq)
 { return cancel_now || (cancel_after_reads && reads >= (unsigned)cancel_after_reads); }
-int vjoOcrComplete(const VjoGameOcrResult *out) { TEST_CHECK(!job_live && !capture_live); return 0; }
+static unsigned complete_failures; /* the next completions the kernel refuses (BUSY) */
+int vjoOcrComplete(const VjoGameOcrResult *out)
+{
+    TEST_CHECK(!job_live && !capture_live);
+    if (complete_failures) { complete_failures--; return VJO_ERR_BUSY; }
+    return 0;
+}
 /* The kernel's rows: grey of the pixels, straight into the worker's capture block. */
 int vjoOcrCaptureRows(const VjoGameOcrRows *req, void *dst, VjoGameOcrRowsInfo *info)
 {
@@ -197,6 +216,7 @@ static void reset(void)
     job_live = weights_live = job_alloc_failure = weights_alloc_failure = weights_free_failure = 0;
     job_allocs = job_frees = weights_allocs = weights_frees = 0;
     registered_rc = quit_after_delay = cancel_now = cancel_at_open = cancel_after_reads = 0;
+    take_calls = take_wait_us = take_quit = 0; take_job = 0; complete_failures = 0;
     open_failure = size_delta = stat_failure = corrupt = 0; mtime = 0x12345678;
     opens = closes = reads = bytes_read = loads = delays = 0; file_open_now = 0;
     spy_lines = 1; free_query_error = 0;
@@ -365,6 +385,38 @@ static void inactive_game_and_stop_release_weights(void)
     quitting = 0; registered_rc = 0; quit_after_delay = 0;
     TEST_CHECK(!run("FL10_w8.vocr", &out) && weights_live && out.weights == VJO_GAME_OCR_WEIGHTS_READ);
     TEST_CHECK(!vjo_game_ocr_worker_stop() && !weights_live && !resident.model);
+}
+/* The worker's loop keeps its pace whatever the kernel does: after an idle
+ * vjoOcrTake that answered at once (an older kernel) it sleeps its 100 ms, so it
+ * never spins; after one the kernel held for its 100 ms wait it asks again at
+ * once (the wait is the pace, and a job submitted meanwhile is claimed when it
+ * comes, not at the next poll); after a job it asks again at once. */
+static void worker_loop_keeps_its_pace(void)
+{
+    reset(); take_quit = 5; /* an older kernel */
+    worker_main(0, NULL);
+    TEST_CHECK(take_calls == 5 && delays == 5 && clock_value >= 5 * 100000u);
+    TEST_MSG("%u takes, %u sleeps", take_calls, delays);
+    reset(); take_quit = 5; take_wait_us = 100000; /* the kernel waits */
+    worker_main(0, NULL);
+    TEST_CHECK(take_calls == 5 && delays == 0 && clock_value >= 5 * 100000u && clock_value < 6 * 100000u);
+    TEST_MSG("%u takes, %u sleeps", take_calls, delays);
+    reset(); take_quit = 3; take_wait_us = 100000; take_job = 1; /* a job, then idle */
+    worker_main(0, NULL);
+    TEST_CHECK(take_calls == 3 && delays == 0 && !claim_outstanding);
+    reset(); take_quit = 3; take_job = 1; /* a job on an older kernel: the next take at once, then its sleeps */
+    worker_main(0, NULL);
+    TEST_CHECK(take_calls == 3 && delays == 2);
+    /* a job whose completion the kernel refuses: the claim is retried after 50 ms, never at once */
+    reset(); take_quit = 2; take_wait_us = 100000; take_job = 1; complete_failures = 1;
+    worker_main(0, NULL);
+    TEST_CHECK(take_calls == 2 && delays == 2 && !claim_outstanding);
+    TEST_MSG("%u takes, %u sleeps", take_calls, delays);
+    /* a wait cut short (a job submitted and cancelled before it was taken): the 100 ms sleep */
+    reset(); take_quit = 2; take_wait_us = 20000;
+    worker_main(0, NULL);
+    TEST_CHECK(take_calls == 2 && delays == 2);
+    reset();
 }
 static void failed_release_blocks_until_stop_retries(void)
 {
@@ -537,5 +589,6 @@ TEST_LIST = {
     {"the preflight counts resident weights once; a refusal releases them", preflight_counts_resident_weights_and_refusal_releases_them},
     {"an inactive game and the worker stop release the weights", inactive_game_and_stop_release_weights},
     {"a failed release blocks the worker until stop retries it", failed_release_blocks_until_stop_retries},
+    {"the worker's loop keeps its pace with a waiting kernel and an older one", worker_loop_keeps_its_pace},
     {NULL, NULL}
 };
