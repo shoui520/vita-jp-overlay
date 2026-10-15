@@ -16,19 +16,20 @@ API 20 job has run on a console yet, so its total is an estimate built from both
 
 ## The job, end to end (estimate)
 
-One Auto OCR job on main's defaults (bcb780e: the stable-text wait of 150 ms, beam + LM decoding
-with the 1000k LM, the VOCR4-W20 cascade; boxes refined in the PSP regions), VOCR3-H15 and the LM
-resident, at the linefind dev regions' means (9.4 strips, 2.4 lines, 93 CTC frames and 35 cascade
-frames per job; 372 regions of vita-vn-ocr's `eval/linefind/manifests` `vita_dev`/`psp_dev`, no
-protected set):
+The baseline: one Auto OCR job on main's defaults at bcb780e (the stable-text wait of 150 ms, beam
++ LM decoding with the 1000k LM, the VOCR4-W20 cascade; boxes refined in the PSP regions),
+VOCR3-H15 and the LM resident, at the linefind dev regions' means (9.4 strips, 2.4 lines, 93 CTC
+frames and 35 cascade frames per job; 372 regions of vita-vn-ocr's `eval/linefind/manifests`
+`vita_dev`/`psp_dev`, no protected set). [After #100 and #102](#after-100-and-102) below is the
+same job on main since:
 
 | part | 444 MHz, 60 fps | 444 MHz, 30 fps | 333 MHz, 60 fps | 333 MHz, 30 fps | estimate (333 MHz, 60 fps) | what sets it |
 |---|---:|---:|---:|---:|---:|---|
-| take (game worker poll) | 0-100 ms | 0-100 ms | 0-100 ms | 0-100 ms | 50 ms | `game_ocr/main.c:1103`, 100 ms between `vjoOcrTake` calls |
+| take (game worker poll) | 0-100 ms | 0-100 ms | 0-100 ms | 0-100 ms | 50 ms | `game_ocr/main.c` (bcb780e), 100 ms between `vjoOcrTake` calls |
 | capture + finder + wait | 212-250 ms | 324-361 ms | 212-262 ms | 324-374 ms | 262 ms | 9.4 strips, a display frame each, and the wait's sleep (simulated: 212 ms at 60 fps); the finder's 25-51 ms (A9, 333 MHz) inside or after them |
 | recognition (VOCR3-H15, beam + LM) | 197-375 ms | 197-375 ms | 263-499 ms | 263-499 ms | 505 ms | 93 frames; console 5.06 ms a frame, + the LM's 0.06-0.34 ms (A9, 333 MHz) |
 | cascade (VOCR4-W20 re-reads) | 104-190 ms | 104-190 ms | 139-253 ms | 139-253 ms | 256 ms | 35 frames a job read again (43% of the lines), 3.9-6.9 ms a frame (A9, 333 MHz) |
-| result (Shell poll) | 0-50 ms | 0-50 ms | 0-50 ms | 0-50 ms | 25 ms | `shell/game_ocr_client.c:55`, 50 ms between `vjoOcrRead` calls |
+| result (Shell poll) | 0-50 ms | 0-50 ms | 0-50 ms | 0-50 ms | 25 ms | `shell/game_ocr_client.c` (bcb780e), 50 ms between `vjoOcrRead` calls |
 | log.txt | 273-1365 ms | 273-1365 ms | 273-1365 ms | 273-1365 ms | 456 ms | 29 lines, each an open/append/close of `log.txt`; console 9.4-47 ms an append (estimate 15.7) |
 | text post-processing | < 0.1 ms | < 0.1 ms | < 0.1 ms | < 0.1 ms | 0 ms | A9 estimate |
 | first-word lookup | 59-81 ms | 59-81 ms | 59-81 ms | 59-81 ms | 70 ms | console: 15.3 ms + 3.82 ms a read, 14.3 reads |
@@ -67,6 +68,25 @@ and the lookup's fit come from the same logs (the append's cost does not: it is 
 So main's job is estimated at about 0.5 s more than test.1's (1.6 s against 1.1 s at the dev
 means, `status.txt` full): the cascade, the wait and the log's 29 lines instead of 22 (the API 20
 steps and the recognized text, #88).
+
+### After #100 and #102
+
+The same job on main with #100 (a job's result lines and its text's written as one append each:
+29 lines in 8 appends) and #102 (the take and the read wait in the kernel for the submission and
+the completion instead of 100 ms and 50 ms polls); every other part as above:
+
+| part | 444 MHz, 60 fps | 444 MHz, 30 fps | 333 MHz, 60 fps | 333 MHz, 30 fps | estimate (333 MHz, 60 fps) |
+|---|---:|---:|---:|---:|---:|
+| take (the submission wakes the worker) | 0 ms | 0 ms | 0 ms | 0 ms | 0 ms |
+| result (the completion wakes the Shell) | 0 ms | 0 ms | 0 ms | 0 ms | 0 ms |
+| log.txt (8 appends) | 75-376 ms | 75-376 ms | 75-376 ms | 75-376 ms | 126 ms |
+| **total** | **647-1272 ms** | **759-1384 ms** | **748-1472 ms** | **860-1583 ms** | **1219 ms** |
+| + while `status.txt` is under 64 KiB | +75-376 ms | +75-376 ms | +75-376 ms | +75-376 ms | +126 ms |
+| a game's first job | 1052-1701 ms | 1163-1812 ms | 1152-1900 ms | 1264-2012 ms | 1635 ms |
+
+So the estimate goes from 1624 to 1219 ms (−405 ms, −25%), and from 2080 to 1345 ms (−735 ms) in
+a boot's first jobs, at 333 MHz and 60 fps. The woken threads' scheduling (the game worker runs at
+the lowest user priority) is not modelled, and neither is what #81's jobs leave unexplained.
 
 ## Console calibration
 
@@ -183,21 +203,22 @@ In the order this repository can act on them, with what each costs a job on the 
 (estimates at 333 MHz, 60 fps, main's defaults); recognition, the largest part (505 ms), is
 vita-vn-ocr's runtime.
 
-1. **Logging: 0.46 s of a 1.6 s job** (est.; 0.27-1.37 s), twice that in a boot's first jobs
-   (est. 10-20). Every `vjo_log` line is an open/append/close of `log.txt`, and of `status.txt`
-   while that is under 64 KiB (`shell/log_vita.c:46-66, 94-109`), so a crash keeps every line,
-   and on the console each append costs 9-47 ms ([console calibration](#console-calibration)).
-   Main's job logs 29 lines: 21 of them come from one result, back to back (`shell/worker.c`
-   `vocr_run_one`: `game vocr rc=`, `capture`, then `log_vocr_measurements`' `memory`, `speed`,
-   `cascade speed` (in 62% of the dev jobs) and `lines`, and `log_vocr_steps`' 15 steps), and
-   one or two per recognized line (`log_text_lines`). Formatting is 4-8 µs a line (A9). ds4vita
-   (aad83c9 `log.c:8-49`) and VitaGrafix (65b6ee3 `src/log.c:10-61`) keep a buffer and write it
-   with one open/write/close. The kernel's `kernel.txt` is flushed with its own open/close on
-   every 16 ms tick that has new lines (`kernel/main.c:131-160` `kernel_file_flush`, called at
-   `:217`), about 3 per job. Fix: one result's lines written with one append, the same bytes in
-   the same order (est. 0.33 s a job at 15.7 ms an append, 0.44 s at the jobs' 20.9 ms; twice
-   that while `status.txt` is under 64 KiB).
-2. **Polled hand-offs: 75 ms per job on average, 150 ms at worst.** The game worker sleeps 100 ms
+1. **Logging: 0.46 s of a 1.6 s job** (est.; 0.27-1.37 s; #100 brings it to 0.13 s), twice that
+   in a boot's first jobs (est. 10-20). Every `vjo_log` line is an open/append/close of
+   `log.txt`, and of `status.txt` while that is under 64 KiB (`shell/log_vita.c:46-66, 94-109`),
+   so a crash keeps every line, and on the console each append costs 9-47 ms ([console
+   calibration](#console-calibration)). Main's job logs 29 lines: 21 of them come from one
+   result, back to back (`shell/worker.c` `vocr_run_one`: `game vocr rc=`, `capture`, then
+   `log_vocr_measurements`' `memory`, `speed`, `cascade speed` (in 62% of the dev jobs) and
+   `lines`, and `log_vocr_steps`' 15 steps), and one or two per recognized line
+   (`log_text_lines`). Formatting is 4-8 µs a line (A9). ds4vita (aad83c9 `log.c:8-49`) and
+   VitaGrafix (65b6ee3 `src/log.c:10-61`) keep a buffer and write it with one open/write/close.
+   The kernel's `kernel.txt` is flushed with its own open/close on every 16 ms tick that has new
+   lines (`kernel/main.c:131-160` `kernel_file_flush`, called at `:217`), about 3 per job. Fix:
+   one result's lines written with one append, the same bytes in the same order (est. 0.33 s a
+   job at 15.7 ms an append, 0.44 s at the jobs' 20.9 ms; twice that while `status.txt` is under
+   64 KiB).
+2. **Polled hand-offs: 75 ms per job on average, 150 ms at worst** (fixed by #102). The game worker sleeps 100 ms
    between `vjoOcrComplete`/`vjoOcrRegister` + `vjoOcrTake` rounds (`game_ocr/main.c:1080-1103`;
    50 ms while a claim is outstanding), so a submitted job waits 0-100 ms before the game claims
    it, and every candidate game wakes ten times a second for those calls. The Shell asks for the

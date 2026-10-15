@@ -10,12 +10,23 @@ import math
 
 # Constants from the source, with where they are (checked by tools/tests/test_bench_model.py).
 SOURCE = {
-    "worker_take_poll_ms": (100, "game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"),
-    "shell_result_poll_ms": (50, "shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"),
+    "take_wait_ms": (100, "kernel/game_ocr.c TAKE_WAIT_US: an idle vjoOcrTake waits this long for a submission, "
+                          "which wakes it (#102)"),
+    "read_wait_ms": (50, "kernel/game_ocr.c READ_WAIT_US: a pending vjoOcrRead waits this long for the job's "
+                         "completion, which wakes it (#102)"),
+    "worker_nap_ms": (100, "game_ocr/main.c worker_main: the sleep after a take the kernel answered at once"),
+    "log_batch_lines": (24, "shell/shell.h VJO_LOG_BATCH_LINES: the lines one log batch holds (#100)"),
     "control_poll_ms": (50, "shell/worker.c POLL_TIMEOUT_US: the control thread's vjoWaitEvent timeout"),
     "kernel_tick_ms": (16, "kernel/main.c POLL_US: the kernel worker's tick"),
     "signature_every_frames": (8, "kernel/vjo_kernel.h VJO_CHECK_EVERY_FRAMES"),
     "settle_ms": (300, "kernel/scene.h SCENE_STABLE_US"),
+}
+
+# The hand-off's polls before #102 (v0.8.0-test.1 and the baseline, main bcb780e), no longer in the source.
+POLLS_BEFORE = {
+    "worker_take_poll_ms": (100, "game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between "
+                                 "vjoOcrTake calls"),
+    "shell_result_poll_ms": (50, "shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"),
 }
 
 # The Shell's log.txt lines of one Auto OCR job that finds lines, with the local dictionary in
@@ -36,11 +47,25 @@ KERNEL_LOG_LINES_PER_JOB = 3  # settled, ocr job N, first pass in (kernel/main.c
 
 
 def job_log_lines(kind, lines, cascade_jobs=0.0, text_extra=0.0):
-    """Log lines of one job (JOB_LOG); kind "api19" (v0.8.0-test.1's job) or "default" (main's)."""
+    """Log lines of one job (JOB_LOG); kind "api19" (v0.8.0-test.1's job), "baseline" (main bcb780e's
+    default job) or "default" (main's: the same lines)."""
     n = JOB_LOG["start"] + JOB_LOG["result"] + math.ceil(lines / 6) + JOB_LOG["after"] + JOB_LOG["subtitle"]
     if kind == "api19":
         return n + JOB_LOG["steps_api19"]
     return n + JOB_LOG["steps"] + cascade_jobs + lines + text_extra
+
+
+def job_log_appends(kind, lines, cascade_jobs=0.0, text_extra=0.0):
+    """Appends of log.txt (and of status.txt while it is under 64 KiB) one job makes. Before #100 every
+    line was one; main's (#100) writes the result's lines (rc, capture, memory, speed, cascade speed,
+    lines, the steps) and the recognized text's as one batch each (shell/worker.c vocr_run_one,
+    log_text_lines; a batch holds log_batch_lines lines), the others one each: job start, the Paf
+    allocation, the dictionary workspace, the lookup, job done, subtitle text ready."""
+    if kind != "default":
+        return job_log_lines(kind, lines, cascade_jobs, text_extra)
+    result = JOB_LOG["result"] + math.ceil(lines / 6) + JOB_LOG["steps"] + cascade_jobs
+    batches = math.ceil(result / SOURCE["log_batch_lines"][0]) + (1 if lines else 0)
+    return JOB_LOG["start"] + batches + JOB_LOG["after"] + JOB_LOG["subtitle"]
 
 
 # The console: #81's --collect logs of v0.8.0-test.1 (API 19's job; private, aggregates only): the 11
@@ -178,8 +203,9 @@ def dev_default(dev, fps):
 
 def job_model(a9, dev, mhz, fps, kind="default", first_job=False, given=None):
     """The latency of one Auto OCR job, settled screen to the first word ready, as a (low, high) range and a
-    point estimate in ms, with its parts. kind "default": main's default job at the dev regions' means;
-    "api19": v0.8.0-test.1's job (greedy, no wait, no cascade). given: the job's own strips, frames, lines,
+    point estimate in ms, with its parts. kind "default": main's default job at the dev regions' means, with
+    #100's log batches and #102's hand-off; "baseline": the same job on main bcb780e (line-by-line logging,
+    the polls); "api19": v0.8.0-test.1's job (greedy, no wait, no cascade, the polls). given: the job's own strips, frames, lines,
     log lines, lookup reads and region scale, in place of the dev means (the console check)."""
     s = (dev or {}).get("summary", {})
     d = dev_default(dev, fps)
@@ -201,9 +227,10 @@ def job_model(a9, dev, mhz, fps, kind="default", first_job=False, given=None):
         casc_frames = d.get("cascade_frames", {}).get("mean", 0.0)
         casc_jobs = d.get("jobs_with_cascade", 0) / max(1, s.get("regions", 1))
     log_lines = g.get("log_lines", job_log_lines(kind, lines, casc_jobs))
-    # Each line is an append of log.txt, and of status.txt too while that is under 64 KiB (est. the first 10-20
-    # jobs of a boot): the job takes one append a line (status.txt full), and status_extra is what a job
-    # adds while it is not.
+    # Each append is of log.txt, and of status.txt too while that is under 64 KiB (est. the first 10-20 jobs
+    # of a boot): the job's own appends assume status.txt full, and status_extra is what a job adds while it
+    # is not. given log_appends (the console check): the appends the logs counted.
+    job_appends = job_log_appends(kind, lines, casc_jobs)
     appends = g.get("log_appends")
     scale = g.get("scale", 1.0)  # the finder's work scales with the region's pixels
     find = tuple(v * scale for v in ms(a9, "find", mhz))
@@ -216,8 +243,9 @@ def job_model(a9, dev, mhz, fps, kind="default", first_job=False, given=None):
     fmt_line = ms(a9, "log", mhz)
     lookup = a9["workloads"]["lookup_first"]["counters"]
     reads_per = g.get("lookup_reads", lookup["reads"] / max(1, lookup["lookups"]))
-    take = SOURCE["worker_take_poll_ms"][0]
-    poll = SOURCE["shell_result_poll_ms"][0]
+    polled = kind != "default"  # #102: the take and the read wait in the kernel for the submission / completion
+    take = POLLS_BEFORE["worker_take_poll_ms"][0] if polled else 0
+    poll = POLLS_BEFORE["shell_result_poll_ms"][0] if polled else 0
     fs_lo, fs_hi, fs_est, _ = CONSOLE["fs_append_ms"]
     lk_fixed, lk_read = CONSOLE["lookup_fixed_ms"][0], CONSOLE["lookup_read_ms"][0]
     # The console's own rate where it was measured: H15 at 5.06 ms per frame is the A9 model's upper
@@ -229,8 +257,12 @@ def job_model(a9, dev, mhz, fps, kind="default", first_job=False, given=None):
     def part(name, lo, hi, est, note):
         parts[name] = (lo, hi, est, note)
 
-    part("take (game worker poll)", 0.0, float(take), take / 2,
-         f"0-{take} ms, mean {take / 2:.0f}: {SOURCE['worker_take_poll_ms'][1]}")
+    if polled:
+        part("take (game worker poll)", 0.0, float(take), take / 2,
+             f"0-{take} ms, mean {take / 2:.0f}: {POLLS_BEFORE['worker_take_poll_ms'][1]}")
+    else:
+        part("take (the submission wakes the worker)", 0.0, 0.0, 0.0,
+             f"{SOURCE['take_wait_ms'][1]}; the woken thread's scheduling (the lowest user priority) is not modelled")
     wait = "" if kind == "api19" else ", the stable-text wait's pass and sleep included"
     part("capture + finder" + ("" if kind == "api19" else " + wait"), max(display[0], find[0]), display[1] + find[1],
          display[1] + find[1],
@@ -247,12 +279,17 @@ def job_model(a9, dev, mhz, fps, kind="default", first_job=False, given=None):
              casc_frames * (w20[1] + lmf[1]) * k_console,
              f"{casc_frames:.0f} CTC frames a job read again (dev mean: {d.get('cascade_share', 0) * 100:.0f}% of "
              f"the lines), {fmt_range(w20, 2)} a frame (A9) + the LM")
-    part("result (Shell poll)", 0.0, float(poll), poll / 2,
-         f"0-{poll} ms, mean {poll / 2:.0f}: {SOURCE['shell_result_poll_ms'][1]}")
+    if polled:
+        part("result (Shell poll)", 0.0, float(poll), poll / 2,
+             f"0-{poll} ms, mean {poll / 2:.0f}: {POLLS_BEFORE['shell_result_poll_ms'][1]}")
+    else:
+        part("result (the completion wakes the Shell)", 0.0, 0.0, 0.0, SOURCE["read_wait_ms"][1])
     if appends is None:
-        part("log.txt", log_lines * fs_lo, log_lines * fs_hi, log_lines * fs_est,
-             f"{log_lines:.0f} lines, each an open/append/close of log.txt (status.txt full); console "
-             f"{fs_lo:.1f}-{fs_hi:.1f} ms an append (estimate {fs_est}); formatting {fmt_range(fmt_line, 3)} a line")
+        how = ("one append each" if kind != "default" else
+               f"{job_appends:.0f} appends: the result's and the text's lines as one batch each (#100)")
+        part("log.txt", job_appends * fs_lo, job_appends * fs_hi, job_appends * fs_est,
+             f"{log_lines:.0f} lines, {how}, of log.txt (status.txt full); console {fs_lo:.1f}-{fs_hi:.1f} ms an "
+             f"append (estimate {fs_est}); formatting {fmt_range(fmt_line, 3)} a line")
     else:
         part("log.txt (+ status.txt)", appends * fs_lo, appends * fs_hi, appends * fs_est,
              f"{log_lines:.1f} lines, {appends:.1f} appends (status.txt under 64 KiB for most jobs); console "
@@ -282,7 +319,8 @@ def job_model(a9, dev, mhz, fps, kind="default", first_job=False, given=None):
     est = math.fsum(p[2] for p in parts.values())
     return {"mhz": mhz, "fps": fps, "kind": kind, "first_job": first_job, "strips": strips, "lines": lines,
             "frames": frames, "log_lines": log_lines, "cascade_frames": casc_frames,
-            "status_extra": [log_lines * fs_lo, log_lines * fs_hi, log_lines * fs_est],
+            "log_appends": job_appends if appends is None else appends,
+            "status_extra": [job_appends * fs_lo, job_appends * fs_hi, job_appends * fs_est],
             "parts": {k: {"low": v[0], "high": v[1], "estimate": v[2], "note": v[3]} for k, v in parts.items()},
             "total": [lo, hi], "estimate": est, "mean_polling_ms": take / 2 + poll / 2}
 
@@ -311,6 +349,7 @@ def console_check(a9):
 def build_report(host, a9, dev, workloads):
     rows = stage_rows(host, a9, workloads)
     report = {"stages": rows, "source": {k: v[0] for k, v in SOURCE.items()},
+              "polls_before": {k: v[0] for k, v in POLLS_BEFORE.items()},
               "console": {k: (list(v) if isinstance(v, tuple) else v) for k, v in CONSOLE.items()},
               "job_log": JOB_LOG, "host_cpu": (host or {}).get("cpu"), "dev": (dev or {}).get("summary")}
     md = ["| workload | per | host (x86-64) | A9 insns | A9 at 444 MHz | A9 at 333 MHz | libc share | parity |",
@@ -333,7 +372,9 @@ def build_report(host, a9, dev, workloads):
     md += [f"| `{r['workload']}` | {r['what']} | {r['memory']} |" for r in rows]
     if a9 and "recognize_h15" in a9.get("workloads", {}):
         report["jobs"] = []
-        for kind, title in (("default", "main's default job"), ("api19", "API 19's job (v0.8.0-test.1)")):
+        for kind, title in (("default", "main's default job (#100's log batches, #102's hand-off)"),
+                            ("baseline", "the baseline: the same job on main bcb780e"),
+                            ("api19", "API 19's job (v0.8.0-test.1)")):
             models = [job_model(a9, dev, mhz, fps, kind=kind) for mhz in (444, 333) for fps in FPS]
             report["jobs"] += models
             md += ["", f"| {title} | 444 MHz, 60 fps | 444 MHz, 30 fps | 333 MHz, 60 fps | 333 MHz, 30 fps | "
@@ -344,7 +385,7 @@ def build_report(host, a9, dev, workloads):
                     f" | {models[2]['parts'][part]['estimate']:.0f} ms |")
             md.append("| **total** | " + " | ".join(f"**{m['total'][0]:.0f}-{m['total'][1]:.0f} ms**" for m in models)
                       + f" | **{models[2]['estimate']:.0f} ms** |")
-            md.append("| + while status.txt is under 64 KiB (a boot's first jobs, est. 10-20: two appends a line) | " +
+            md.append("| + while status.txt is under 64 KiB (a boot's first jobs, est. 10-20: each append twice) | " +
                       " | ".join(f"+{m['status_extra'][0]:.0f}-{m['status_extra'][1]:.0f} ms" for m in models) +
                       f" | +{models[2]['status_extra'][2]:.0f} ms |")
             first = [job_model(a9, dev, mhz, fps, kind=kind, first_job=True) for mhz in (444, 333) for fps in FPS]

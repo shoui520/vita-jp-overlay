@@ -14,8 +14,10 @@ import bench_stages
 
 # Where each constant of bench_model.SOURCE lives, and the pattern that holds its value.
 WHERE = {
-    "worker_take_poll_ms": ("game_ocr/main.c", r"sceKernelDelayThread\(claim_outstanding \? \d+ : (\d+)\)", 1000),
-    "shell_result_poll_ms": ("shell/game_ocr_client.c", r"delay_us\(client->ud, (\d+)\)", 1000),
+    "take_wait_ms": ("kernel/game_ocr.c", r"#define TAKE_WAIT_US (\d+)u", 1000),
+    "read_wait_ms": ("kernel/game_ocr.c", r"#define READ_WAIT_US (\d+)u", 1000),
+    "worker_nap_ms": ("game_ocr/main.c", r"sceKernelDelayThread\(claim_outstanding \? \d+ : (\d+)\)", 1000),
+    "log_batch_lines": ("shell/shell.h", r"#define VJO_LOG_BATCH_LINES (\d+)", 1),
     "control_poll_ms": ("shell/worker.c", r"#define POLL_TIMEOUT_US\s+(\d+)", 1000),
     "kernel_tick_ms": ("kernel/main.c", r"#define POLL_US\s+(\d+)", 1000),
     "signature_every_frames": ("kernel/vjo_kernel.h", r"#define VJO_CHECK_EVERY_FRAMES (\d+)", 1),
@@ -68,6 +70,26 @@ class BenchModelTest(unittest.TestCase):
         # main's: 15 steps, a text line per line, the cascade's speed line when it read a line again
         self.assertEqual(bench_model.job_log_lines("default", 1), 27)
         self.assertEqual(bench_model.job_log_lines("default", 1, cascade_jobs=1), 28)
+        # appends: the baseline's one a line; main's (#100) the result's and the text's lines as one batch each
+        self.assertEqual(bench_model.job_log_appends("baseline", 1), 27)
+        self.assertEqual(bench_model.job_log_appends("api19", 1), 22)
+        self.assertEqual(bench_model.job_log_appends("default", 1, cascade_jobs=1), 8)
+        self.assertEqual(bench_model.job_log_appends("default", 0), 7)  # no line: no text batch
+        # the result's batch fits one batch (shell/shell.h VJO_LOG_BATCH_LINES)
+        self.assertLessEqual(4 + 3 + 15 + 1, bench_model.SOURCE["log_batch_lines"][0])
+
+    def test_the_fixes_in_the_model(self):
+        # main's job against the baseline: #100's appends and #102's polls, nothing else
+        bundle = json.loads((ROOT / "docs/benchmarks/pipeline-stages-20261015.json").read_text())
+        jobs = {(j["kind"], j["mhz"], j["fps"], j["first_job"]): j for j in bundle["report"]["jobs"]}
+        for mhz in (444, 333):
+            for fps in (60, 30):
+                new, old = jobs[("default", mhz, fps, False)], jobs[("baseline", mhz, fps, False)]
+                fs = bench_model.CONSOLE["fs_append_ms"][2]
+                saved = (old["log_appends"] - new["log_appends"]) * fs + old["mean_polling_ms"]
+                self.assertAlmostEqual(old["estimate"] - new["estimate"], saved, delta=1e-6)
+                self.assertEqual(new["mean_polling_ms"], 0)
+                self.assertEqual(old["mean_polling_ms"], 75)
 
     def test_committed_baseline_reproduces_its_console_check(self):
         bundle = json.loads((ROOT / "docs/benchmarks/pipeline-stages-20261015.json").read_text())

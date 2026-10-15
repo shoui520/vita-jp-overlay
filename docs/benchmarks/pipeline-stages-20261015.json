@@ -720,12 +720,18 @@
    }
   ],
   "source": {
-   "worker_take_poll_ms": 100,
-   "shell_result_poll_ms": 50,
+   "take_wait_ms": 100,
+   "read_wait_ms": 50,
+   "worker_nap_ms": 100,
+   "log_batch_lines": 24,
    "control_poll_ms": 50,
    "kernel_tick_ms": 16,
    "signature_every_frames": 8,
    "settle_ms": 300
+  },
+  "polls_before": {
+   "worker_take_poll_ms": 100,
+   "shell_result_poll_ms": 50
   },
   "console": {
    "h15_ms_per_frame": [
@@ -953,6 +959,615 @@
     "frames": 93.44623655913979,
     "log_lines": 29.03225806451613,
     "cascade_frames": 35.064516129032256,
+    "log_appends": 8,
+    "status_extra": [
+     75.2,
+     376.0,
+     125.6
+    ],
+    "parts": {
+     "take (the submission wakes the worker)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c TAKE_WAIT_US: an idle vjoOcrTake waits this long for a submission, which wakes it (#102); the woken thread's scheduling (the lowest user priority) is not modelled"
+     },
+     "capture + finder + wait": {
+      "low": 211.83064516129033,
+      "high": 249.76646610723628,
+      "estimate": 249.76646610723628,
+      "note": "9.4 strips, one display frame each at 60 fps (212 ms, the stable-text wait's pass and sleep included); the finder's 18.6-37.9 ms (A9) inside them (low) or after them (high); the hook's CPU (0.71-1.90 ms per strip) is the game's, in its display call"
+     },
+     "recognition (VOCR3-H15, beam + LM)": {
+      "low": 197.12229875507228,
+      "high": 375.39514618238303,
+      "estimate": 379.5721266144748,
+      "note": "A9 estimate, 93 CTC frames (2.4 lines): 2.07-3.75 ms a frame + the LM's 0.04-0.27 ms; console 5.056 ms a frame"
+     },
+     "cascade (VOCR4-W20 re-reads)": {
+      "low": 104.21022533958687,
+      "high": 190.40511481893182,
+      "estimate": 192.52373155347655,
+      "note": "35 CTC frames a job read again (dev mean: 43% of the lines), 2.93-5.16 ms a frame (A9) + the LM"
+     },
+     "result (the completion wakes the Shell)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c READ_WAIT_US: a pending vjoOcrRead waits this long for the job's completion, which wakes it (#102)"
+     },
+     "log.txt": {
+      "low": 75.2,
+      "high": 376.0,
+      "estimate": 125.6,
+      "note": "29 lines, 8 appends: the result's and the text's lines as one batch each (#100), of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+     },
+     "text post-processing": {
+      "low": 0.005990653153153153,
+      "high": 0.011981306306306306,
+      "estimate": 0.011981306306306306,
+      "note": "A9 estimate"
+     },
+     "first-word lookup": {
+      "low": 59.08317507882883,
+      "high": 80.75952,
+      "estimate": 69.8496,
+      "note": "console: 15.3 ms + 3.82 ms a read, 14.3 reads (CPU 0.14-0.48 ms, A9, inside the console's 15.3 ms); ±20% on the reads"
+     }
+    },
+    "total": [
+     647.4523349879315,
+     1272.3382284148574
+    ],
+    "estimate": 1017.3239055814939,
+    "mean_polling_ms": 0.0
+   },
+   {
+    "mhz": 444,
+    "fps": 30,
+    "kind": "default",
+    "first_job": false,
+    "strips": 9.096774193548388,
+    "lines": 2.4166666666666665,
+    "frames": 93.44623655913979,
+    "log_lines": 29.03225806451613,
+    "cascade_frames": 35.064516129032256,
+    "log_appends": 8,
+    "status_extra": [
+     75.2,
+     376.0,
+     125.6
+    ],
+    "parts": {
+     "take (the submission wakes the worker)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c TAKE_WAIT_US: an idle vjoOcrTake waits this long for a submission, which wakes it (#102); the woken thread's scheduling (the lowest user priority) is not modelled"
+     },
+     "capture + finder + wait": {
+      "low": 323.51344086021504,
+      "high": 361.44926180616096,
+      "estimate": 361.44926180616096,
+      "note": "9.1 strips, one display frame each at 30 fps (324 ms, the stable-text wait's pass and sleep included); the finder's 18.6-37.9 ms (A9) inside them (low) or after them (high); the hook's CPU (0.71-1.90 ms per strip) is the game's, in its display call"
+     },
+     "recognition (VOCR3-H15, beam + LM)": {
+      "low": 197.12229875507228,
+      "high": 375.39514618238303,
+      "estimate": 379.5721266144748,
+      "note": "A9 estimate, 93 CTC frames (2.4 lines): 2.07-3.75 ms a frame + the LM's 0.04-0.27 ms; console 5.056 ms a frame"
+     },
+     "cascade (VOCR4-W20 re-reads)": {
+      "low": 104.21022533958687,
+      "high": 190.40511481893182,
+      "estimate": 192.52373155347655,
+      "note": "35 CTC frames a job read again (dev mean: 43% of the lines), 2.93-5.16 ms a frame (A9) + the LM"
+     },
+     "result (the completion wakes the Shell)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c READ_WAIT_US: a pending vjoOcrRead waits this long for the job's completion, which wakes it (#102)"
+     },
+     "log.txt": {
+      "low": 75.2,
+      "high": 376.0,
+      "estimate": 125.6,
+      "note": "29 lines, 8 appends: the result's and the text's lines as one batch each (#100), of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+     },
+     "text post-processing": {
+      "low": 0.005990653153153153,
+      "high": 0.011981306306306306,
+      "estimate": 0.011981306306306306,
+      "note": "A9 estimate"
+     },
+     "first-word lookup": {
+      "low": 59.08317507882883,
+      "high": 80.75952,
+      "estimate": 69.8496,
+      "note": "console: 15.3 ms + 3.82 ms a read, 14.3 reads (CPU 0.14-0.48 ms, A9, inside the console's 15.3 ms); ±20% on the reads"
+     }
+    },
+    "total": [
+     759.1351306868562,
+     1384.021024113782
+    ],
+    "estimate": 1129.0067012804186,
+    "mean_polling_ms": 0.0
+   },
+   {
+    "mhz": 333,
+    "fps": 60,
+    "kind": "default",
+    "first_job": false,
+    "strips": 9.362903225806452,
+    "lines": 2.4166666666666665,
+    "frames": 93.44623655913979,
+    "log_lines": 29.03225806451613,
+    "cascade_frames": 35.064516129032256,
+    "log_appends": 8,
+    "status_extra": [
+     75.2,
+     376.0,
+     125.6
+    ],
+    "parts": {
+     "take (the submission wakes the worker)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c TAKE_WAIT_US: an idle vjoOcrTake waits this long for a submission, which wakes it (#102); the woken thread's scheduling (the lowest user priority) is not modelled"
+     },
+     "capture + finder + wait": {
+      "low": 211.83064516129033,
+      "high": 262.4117397558849,
+      "estimate": 262.4117397558849,
+      "note": "9.4 strips, one display frame each at 60 fps (212 ms, the stable-text wait's pass and sleep included); the finder's 24.8-50.6 ms (A9) inside them (low) or after them (high); the hook's CPU (0.94-2.54 ms per strip) is the game's, in its display call"
+     },
+     "recognition (VOCR3-H15, beam + LM)": {
+      "low": 262.8297316734297,
+      "high": 499.1379159406421,
+      "estimate": 504.69176853836905,
+      "note": "A9 estimate, 93 CTC frames (2.4 lines): 2.75-5.00 ms a frame + the LM's 0.06-0.34 ms; console 5.056 ms a frame"
+     },
+     "cascade (VOCR4-W20 re-reads)": {
+      "low": 138.94696711944917,
+      "high": 253.35046886450968,
+      "estimate": 256.1694716184616,
+      "note": "35 CTC frames a job read again (dev mean: 43% of the lines), 3.90-6.88 ms a frame (A9) + the LM"
+     },
+     "result (the completion wakes the Shell)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c READ_WAIT_US: a pending vjoOcrRead waits this long for the job's completion, which wakes it (#102)"
+     },
+     "log.txt": {
+      "low": 75.2,
+      "high": 376.0,
+      "estimate": 125.6,
+      "note": "29 lines, 8 appends: the result's and the text's lines as one batch each (#100), of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+     },
+     "text post-processing": {
+      "low": 0.007987537537537536,
+      "high": 0.015975075075075073,
+      "estimate": 0.015975075075075073,
+      "note": "A9 estimate"
+     },
+     "first-word lookup": {
+      "low": 59.13100677177177,
+      "high": 80.75952,
+      "estimate": 69.8496,
+      "note": "console: 15.3 ms + 3.82 ms a read, 14.3 reads (CPU 0.19-0.64 ms, A9, inside the console's 15.3 ms); ±20% on the reads"
+     }
+    },
+    "total": [
+     747.9463382634785,
+     1471.6756196361118
+    ],
+    "estimate": 1218.7385549877906,
+    "mean_polling_ms": 0.0
+   },
+   {
+    "mhz": 333,
+    "fps": 30,
+    "kind": "default",
+    "first_job": false,
+    "strips": 9.096774193548388,
+    "lines": 2.4166666666666665,
+    "frames": 93.44623655913979,
+    "log_lines": 29.03225806451613,
+    "cascade_frames": 35.064516129032256,
+    "log_appends": 8,
+    "status_extra": [
+     75.2,
+     376.0,
+     125.6
+    ],
+    "parts": {
+     "take (the submission wakes the worker)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c TAKE_WAIT_US: an idle vjoOcrTake waits this long for a submission, which wakes it (#102); the woken thread's scheduling (the lowest user priority) is not modelled"
+     },
+     "capture + finder + wait": {
+      "low": 323.51344086021504,
+      "high": 374.09453545480966,
+      "estimate": 374.09453545480966,
+      "note": "9.1 strips, one display frame each at 30 fps (324 ms, the stable-text wait's pass and sleep included); the finder's 24.8-50.6 ms (A9) inside them (low) or after them (high); the hook's CPU (0.94-2.54 ms per strip) is the game's, in its display call"
+     },
+     "recognition (VOCR3-H15, beam + LM)": {
+      "low": 262.8297316734297,
+      "high": 499.1379159406421,
+      "estimate": 504.69176853836905,
+      "note": "A9 estimate, 93 CTC frames (2.4 lines): 2.75-5.00 ms a frame + the LM's 0.06-0.34 ms; console 5.056 ms a frame"
+     },
+     "cascade (VOCR4-W20 re-reads)": {
+      "low": 138.94696711944917,
+      "high": 253.35046886450968,
+      "estimate": 256.1694716184616,
+      "note": "35 CTC frames a job read again (dev mean: 43% of the lines), 3.90-6.88 ms a frame (A9) + the LM"
+     },
+     "result (the completion wakes the Shell)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c READ_WAIT_US: a pending vjoOcrRead waits this long for the job's completion, which wakes it (#102)"
+     },
+     "log.txt": {
+      "low": 75.2,
+      "high": 376.0,
+      "estimate": 125.6,
+      "note": "29 lines, 8 appends: the result's and the text's lines as one batch each (#100), of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+     },
+     "text post-processing": {
+      "low": 0.007987537537537536,
+      "high": 0.015975075075075073,
+      "estimate": 0.015975075075075073,
+      "note": "A9 estimate"
+     },
+     "first-word lookup": {
+      "low": 59.13100677177177,
+      "high": 80.75952,
+      "estimate": 69.8496,
+      "note": "console: 15.3 ms + 3.82 ms a read, 14.3 reads (CPU 0.19-0.64 ms, A9, inside the console's 15.3 ms); ±20% on the reads"
+     }
+    },
+    "total": [
+     859.6291339624032,
+     1583.3584153350364
+    ],
+    "estimate": 1330.4213506867154,
+    "mean_polling_ms": 0.0
+   },
+   {
+    "mhz": 444,
+    "fps": 60,
+    "kind": "default",
+    "first_job": true,
+    "strips": 9.362903225806452,
+    "lines": 2.4166666666666665,
+    "frames": 93.44623655913979,
+    "log_lines": 29.03225806451613,
+    "cascade_frames": 35.064516129032256,
+    "log_appends": 8,
+    "status_extra": [
+     75.2,
+     376.0,
+     125.6
+    ],
+    "parts": {
+     "take (the submission wakes the worker)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c TAKE_WAIT_US: an idle vjoOcrTake waits this long for a submission, which wakes it (#102); the woken thread's scheduling (the lowest user priority) is not modelled"
+     },
+     "capture + finder + wait": {
+      "low": 211.83064516129033,
+      "high": 249.76646610723628,
+      "estimate": 249.76646610723628,
+      "note": "9.4 strips, one display frame each at 60 fps (212 ms, the stable-text wait's pass and sleep included); the finder's 18.6-37.9 ms (A9) inside them (low) or after them (high); the hook's CPU (0.71-1.90 ms per strip) is the game's, in its display call"
+     },
+     "recognition (VOCR3-H15, beam + LM)": {
+      "low": 197.12229875507228,
+      "high": 375.39514618238303,
+      "estimate": 379.5721266144748,
+      "note": "A9 estimate, 93 CTC frames (2.4 lines): 2.07-3.75 ms a frame + the LM's 0.04-0.27 ms; console 5.056 ms a frame"
+     },
+     "cascade (VOCR4-W20 re-reads)": {
+      "low": 104.21022533958687,
+      "high": 190.40511481893182,
+      "estimate": 192.52373155347655,
+      "note": "35 CTC frames a job read again (dev mean: 43% of the lines), 2.93-5.16 ms a frame (A9) + the LM"
+     },
+     "result (the completion wakes the Shell)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c READ_WAIT_US: a pending vjoOcrRead waits this long for the job's completion, which wakes it (#102)"
+     },
+     "log.txt": {
+      "low": 75.2,
+      "high": 376.0,
+      "estimate": 125.6,
+      "note": "29 lines, 8 appends: the result's and the text's lines as one batch each (#100), of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+     },
+     "text post-processing": {
+      "low": 0.005990653153153153,
+      "high": 0.011981306306306306,
+      "estimate": 0.011981306306306306,
+      "note": "A9 estimate"
+     },
+     "first-word lookup": {
+      "low": 59.08317507882883,
+      "high": 80.75952,
+      "estimate": 69.8496,
+      "note": "console: 15.3 ms + 3.82 ms a read, 14.3 reads (CPU 0.14-0.48 ms, A9, inside the console's 15.3 ms); ±20% on the reads"
+     },
+     "weights + LM: read + SHA-256 (first job)": {
+      "low": 404.2480622300963,
+      "high": 428.3545980511571,
+      "estimate": 416.3013301406267,
+      "note": "console: 218-231 ms for the 1,155,968 B weights (SHA-256 alone 49.8-104.4 ms, A9); the 987,600 B LM scaled by its bytes"
+     }
+    },
+    "total": [
+     1051.7003972180278,
+     1700.6928264660146
+    ],
+    "estimate": 1433.6252357221206,
+    "mean_polling_ms": 0.0
+   },
+   {
+    "mhz": 444,
+    "fps": 30,
+    "kind": "default",
+    "first_job": true,
+    "strips": 9.096774193548388,
+    "lines": 2.4166666666666665,
+    "frames": 93.44623655913979,
+    "log_lines": 29.03225806451613,
+    "cascade_frames": 35.064516129032256,
+    "log_appends": 8,
+    "status_extra": [
+     75.2,
+     376.0,
+     125.6
+    ],
+    "parts": {
+     "take (the submission wakes the worker)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c TAKE_WAIT_US: an idle vjoOcrTake waits this long for a submission, which wakes it (#102); the woken thread's scheduling (the lowest user priority) is not modelled"
+     },
+     "capture + finder + wait": {
+      "low": 323.51344086021504,
+      "high": 361.44926180616096,
+      "estimate": 361.44926180616096,
+      "note": "9.1 strips, one display frame each at 30 fps (324 ms, the stable-text wait's pass and sleep included); the finder's 18.6-37.9 ms (A9) inside them (low) or after them (high); the hook's CPU (0.71-1.90 ms per strip) is the game's, in its display call"
+     },
+     "recognition (VOCR3-H15, beam + LM)": {
+      "low": 197.12229875507228,
+      "high": 375.39514618238303,
+      "estimate": 379.5721266144748,
+      "note": "A9 estimate, 93 CTC frames (2.4 lines): 2.07-3.75 ms a frame + the LM's 0.04-0.27 ms; console 5.056 ms a frame"
+     },
+     "cascade (VOCR4-W20 re-reads)": {
+      "low": 104.21022533958687,
+      "high": 190.40511481893182,
+      "estimate": 192.52373155347655,
+      "note": "35 CTC frames a job read again (dev mean: 43% of the lines), 2.93-5.16 ms a frame (A9) + the LM"
+     },
+     "result (the completion wakes the Shell)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c READ_WAIT_US: a pending vjoOcrRead waits this long for the job's completion, which wakes it (#102)"
+     },
+     "log.txt": {
+      "low": 75.2,
+      "high": 376.0,
+      "estimate": 125.6,
+      "note": "29 lines, 8 appends: the result's and the text's lines as one batch each (#100), of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+     },
+     "text post-processing": {
+      "low": 0.005990653153153153,
+      "high": 0.011981306306306306,
+      "estimate": 0.011981306306306306,
+      "note": "A9 estimate"
+     },
+     "first-word lookup": {
+      "low": 59.08317507882883,
+      "high": 80.75952,
+      "estimate": 69.8496,
+      "note": "console: 15.3 ms + 3.82 ms a read, 14.3 reads (CPU 0.14-0.48 ms, A9, inside the console's 15.3 ms); ±20% on the reads"
+     },
+     "weights + LM: read + SHA-256 (first job)": {
+      "low": 404.2480622300963,
+      "high": 428.3545980511571,
+      "estimate": 416.3013301406267,
+      "note": "console: 218-231 ms for the 1,155,968 B weights (SHA-256 alone 49.8-104.4 ms, A9); the 987,600 B LM scaled by its bytes"
+     }
+    },
+    "total": [
+     1163.3831929169526,
+     1812.3756221649392
+    ],
+    "estimate": 1545.3080314210454,
+    "mean_polling_ms": 0.0
+   },
+   {
+    "mhz": 333,
+    "fps": 60,
+    "kind": "default",
+    "first_job": true,
+    "strips": 9.362903225806452,
+    "lines": 2.4166666666666665,
+    "frames": 93.44623655913979,
+    "log_lines": 29.03225806451613,
+    "cascade_frames": 35.064516129032256,
+    "log_appends": 8,
+    "status_extra": [
+     75.2,
+     376.0,
+     125.6
+    ],
+    "parts": {
+     "take (the submission wakes the worker)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c TAKE_WAIT_US: an idle vjoOcrTake waits this long for a submission, which wakes it (#102); the woken thread's scheduling (the lowest user priority) is not modelled"
+     },
+     "capture + finder + wait": {
+      "low": 211.83064516129033,
+      "high": 262.4117397558849,
+      "estimate": 262.4117397558849,
+      "note": "9.4 strips, one display frame each at 60 fps (212 ms, the stable-text wait's pass and sleep included); the finder's 24.8-50.6 ms (A9) inside them (low) or after them (high); the hook's CPU (0.94-2.54 ms per strip) is the game's, in its display call"
+     },
+     "recognition (VOCR3-H15, beam + LM)": {
+      "low": 262.8297316734297,
+      "high": 499.1379159406421,
+      "estimate": 504.69176853836905,
+      "note": "A9 estimate, 93 CTC frames (2.4 lines): 2.75-5.00 ms a frame + the LM's 0.06-0.34 ms; console 5.056 ms a frame"
+     },
+     "cascade (VOCR4-W20 re-reads)": {
+      "low": 138.94696711944917,
+      "high": 253.35046886450968,
+      "estimate": 256.1694716184616,
+      "note": "35 CTC frames a job read again (dev mean: 43% of the lines), 3.90-6.88 ms a frame (A9) + the LM"
+     },
+     "result (the completion wakes the Shell)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c READ_WAIT_US: a pending vjoOcrRead waits this long for the job's completion, which wakes it (#102)"
+     },
+     "log.txt": {
+      "low": 75.2,
+      "high": 376.0,
+      "estimate": 125.6,
+      "note": "29 lines, 8 appends: the result's and the text's lines as one batch each (#100), of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+     },
+     "text post-processing": {
+      "low": 0.007987537537537536,
+      "high": 0.015975075075075073,
+      "estimate": 0.015975075075075073,
+      "note": "A9 estimate"
+     },
+     "first-word lookup": {
+      "low": 59.13100677177177,
+      "high": 80.75952,
+      "estimate": 69.8496,
+      "note": "console: 15.3 ms + 3.82 ms a read, 14.3 reads (CPU 0.19-0.64 ms, A9, inside the console's 15.3 ms); ±20% on the reads"
+     },
+     "weights + LM: read + SHA-256 (first job)": {
+      "low": 404.2480622300963,
+      "high": 428.3545980511571,
+      "estimate": 416.3013301406267,
+      "note": "console: 218-231 ms for the 1,155,968 B weights (SHA-256 alone 66.3-139.3 ms, A9); the 987,600 B LM scaled by its bytes"
+     }
+    },
+    "total": [
+     1152.194400493575,
+     1900.0302176872688
+    ],
+    "estimate": 1635.0398851284174,
+    "mean_polling_ms": 0.0
+   },
+   {
+    "mhz": 333,
+    "fps": 30,
+    "kind": "default",
+    "first_job": true,
+    "strips": 9.096774193548388,
+    "lines": 2.4166666666666665,
+    "frames": 93.44623655913979,
+    "log_lines": 29.03225806451613,
+    "cascade_frames": 35.064516129032256,
+    "log_appends": 8,
+    "status_extra": [
+     75.2,
+     376.0,
+     125.6
+    ],
+    "parts": {
+     "take (the submission wakes the worker)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c TAKE_WAIT_US: an idle vjoOcrTake waits this long for a submission, which wakes it (#102); the woken thread's scheduling (the lowest user priority) is not modelled"
+     },
+     "capture + finder + wait": {
+      "low": 323.51344086021504,
+      "high": 374.09453545480966,
+      "estimate": 374.09453545480966,
+      "note": "9.1 strips, one display frame each at 30 fps (324 ms, the stable-text wait's pass and sleep included); the finder's 24.8-50.6 ms (A9) inside them (low) or after them (high); the hook's CPU (0.94-2.54 ms per strip) is the game's, in its display call"
+     },
+     "recognition (VOCR3-H15, beam + LM)": {
+      "low": 262.8297316734297,
+      "high": 499.1379159406421,
+      "estimate": 504.69176853836905,
+      "note": "A9 estimate, 93 CTC frames (2.4 lines): 2.75-5.00 ms a frame + the LM's 0.06-0.34 ms; console 5.056 ms a frame"
+     },
+     "cascade (VOCR4-W20 re-reads)": {
+      "low": 138.94696711944917,
+      "high": 253.35046886450968,
+      "estimate": 256.1694716184616,
+      "note": "35 CTC frames a job read again (dev mean: 43% of the lines), 3.90-6.88 ms a frame (A9) + the LM"
+     },
+     "result (the completion wakes the Shell)": {
+      "low": 0.0,
+      "high": 0.0,
+      "estimate": 0.0,
+      "note": "kernel/game_ocr.c READ_WAIT_US: a pending vjoOcrRead waits this long for the job's completion, which wakes it (#102)"
+     },
+     "log.txt": {
+      "low": 75.2,
+      "high": 376.0,
+      "estimate": 125.6,
+      "note": "29 lines, 8 appends: the result's and the text's lines as one batch each (#100), of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+     },
+     "text post-processing": {
+      "low": 0.007987537537537536,
+      "high": 0.015975075075075073,
+      "estimate": 0.015975075075075073,
+      "note": "A9 estimate"
+     },
+     "first-word lookup": {
+      "low": 59.13100677177177,
+      "high": 80.75952,
+      "estimate": 69.8496,
+      "note": "console: 15.3 ms + 3.82 ms a read, 14.3 reads (CPU 0.19-0.64 ms, A9, inside the console's 15.3 ms); ±20% on the reads"
+     },
+     "weights + LM: read + SHA-256 (first job)": {
+      "low": 404.2480622300963,
+      "high": 428.3545980511571,
+      "estimate": 416.3013301406267,
+      "note": "console: 218-231 ms for the 1,155,968 B weights (SHA-256 alone 66.3-139.3 ms, A9); the 987,600 B LM scaled by its bytes"
+     }
+    },
+    "total": [
+     1263.8771961924995,
+     2011.7130133861936
+    ],
+    "estimate": 1746.7226808273422,
+    "mean_polling_ms": 0.0
+   },
+   {
+    "mhz": 444,
+    "fps": 60,
+    "kind": "baseline",
+    "first_job": false,
+    "strips": 9.362903225806452,
+    "lines": 2.4166666666666665,
+    "frames": 93.44623655913979,
+    "log_lines": 29.03225806451613,
+    "cascade_frames": 35.064516129032256,
+    "log_appends": 29.03225806451613,
     "status_extra": [
      272.90322580645164,
      1364.5161290322583,
@@ -963,7 +1578,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder + wait": {
       "low": 211.83064516129033,
@@ -987,13 +1602,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 272.90322580645164,
       "high": 1364.5161290322583,
       "estimate": 455.80645161290323,
-      "note": "29 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+      "note": "29 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
      },
      "text post-processing": {
       "low": 0.005990653153153153,
@@ -1018,13 +1633,14 @@
    {
     "mhz": 444,
     "fps": 30,
-    "kind": "default",
+    "kind": "baseline",
     "first_job": false,
     "strips": 9.096774193548388,
     "lines": 2.4166666666666665,
     "frames": 93.44623655913979,
     "log_lines": 29.03225806451613,
     "cascade_frames": 35.064516129032256,
+    "log_appends": 29.03225806451613,
     "status_extra": [
      272.90322580645164,
      1364.5161290322583,
@@ -1035,7 +1651,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder + wait": {
       "low": 323.51344086021504,
@@ -1059,13 +1675,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 272.90322580645164,
       "high": 1364.5161290322583,
       "estimate": 455.80645161290323,
-      "note": "29 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+      "note": "29 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
      },
      "text post-processing": {
       "low": 0.005990653153153153,
@@ -1090,13 +1706,14 @@
    {
     "mhz": 333,
     "fps": 60,
-    "kind": "default",
+    "kind": "baseline",
     "first_job": false,
     "strips": 9.362903225806452,
     "lines": 2.4166666666666665,
     "frames": 93.44623655913979,
     "log_lines": 29.03225806451613,
     "cascade_frames": 35.064516129032256,
+    "log_appends": 29.03225806451613,
     "status_extra": [
      272.90322580645164,
      1364.5161290322583,
@@ -1107,7 +1724,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder + wait": {
       "low": 211.83064516129033,
@@ -1131,13 +1748,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 272.90322580645164,
       "high": 1364.5161290322583,
       "estimate": 455.80645161290323,
-      "note": "29 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+      "note": "29 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
      },
      "text post-processing": {
       "low": 0.007987537537537536,
@@ -1162,13 +1779,14 @@
    {
     "mhz": 333,
     "fps": 30,
-    "kind": "default",
+    "kind": "baseline",
     "first_job": false,
     "strips": 9.096774193548388,
     "lines": 2.4166666666666665,
     "frames": 93.44623655913979,
     "log_lines": 29.03225806451613,
     "cascade_frames": 35.064516129032256,
+    "log_appends": 29.03225806451613,
     "status_extra": [
      272.90322580645164,
      1364.5161290322583,
@@ -1179,7 +1797,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder + wait": {
       "low": 323.51344086021504,
@@ -1203,13 +1821,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 272.90322580645164,
       "high": 1364.5161290322583,
       "estimate": 455.80645161290323,
-      "note": "29 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+      "note": "29 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
      },
      "text post-processing": {
       "low": 0.007987537537537536,
@@ -1234,13 +1852,14 @@
    {
     "mhz": 444,
     "fps": 60,
-    "kind": "default",
+    "kind": "baseline",
     "first_job": true,
     "strips": 9.362903225806452,
     "lines": 2.4166666666666665,
     "frames": 93.44623655913979,
     "log_lines": 29.03225806451613,
     "cascade_frames": 35.064516129032256,
+    "log_appends": 29.03225806451613,
     "status_extra": [
      272.90322580645164,
      1364.5161290322583,
@@ -1251,7 +1870,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder + wait": {
       "low": 211.83064516129033,
@@ -1275,13 +1894,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 272.90322580645164,
       "high": 1364.5161290322583,
       "estimate": 455.80645161290323,
-      "note": "29 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+      "note": "29 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
      },
      "text post-processing": {
       "low": 0.005990653153153153,
@@ -1312,13 +1931,14 @@
    {
     "mhz": 444,
     "fps": 30,
-    "kind": "default",
+    "kind": "baseline",
     "first_job": true,
     "strips": 9.096774193548388,
     "lines": 2.4166666666666665,
     "frames": 93.44623655913979,
     "log_lines": 29.03225806451613,
     "cascade_frames": 35.064516129032256,
+    "log_appends": 29.03225806451613,
     "status_extra": [
      272.90322580645164,
      1364.5161290322583,
@@ -1329,7 +1949,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder + wait": {
       "low": 323.51344086021504,
@@ -1353,13 +1973,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 272.90322580645164,
       "high": 1364.5161290322583,
       "estimate": 455.80645161290323,
-      "note": "29 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+      "note": "29 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
      },
      "text post-processing": {
       "low": 0.005990653153153153,
@@ -1390,13 +2010,14 @@
    {
     "mhz": 333,
     "fps": 60,
-    "kind": "default",
+    "kind": "baseline",
     "first_job": true,
     "strips": 9.362903225806452,
     "lines": 2.4166666666666665,
     "frames": 93.44623655913979,
     "log_lines": 29.03225806451613,
     "cascade_frames": 35.064516129032256,
+    "log_appends": 29.03225806451613,
     "status_extra": [
      272.90322580645164,
      1364.5161290322583,
@@ -1407,7 +2028,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder + wait": {
       "low": 211.83064516129033,
@@ -1431,13 +2052,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 272.90322580645164,
       "high": 1364.5161290322583,
       "estimate": 455.80645161290323,
-      "note": "29 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+      "note": "29 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
      },
      "text post-processing": {
       "low": 0.007987537537537536,
@@ -1468,13 +2089,14 @@
    {
     "mhz": 333,
     "fps": 30,
-    "kind": "default",
+    "kind": "baseline",
     "first_job": true,
     "strips": 9.096774193548388,
     "lines": 2.4166666666666665,
     "frames": 93.44623655913979,
     "log_lines": 29.03225806451613,
     "cascade_frames": 35.064516129032256,
+    "log_appends": 29.03225806451613,
     "status_extra": [
      272.90322580645164,
      1364.5161290322583,
@@ -1485,7 +2107,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder + wait": {
       "low": 323.51344086021504,
@@ -1509,13 +2131,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 272.90322580645164,
       "high": 1364.5161290322583,
       "estimate": 455.80645161290323,
-      "note": "29 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+      "note": "29 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
      },
      "text post-processing": {
       "low": 0.007987537537537536,
@@ -1553,6 +2175,7 @@
     "frames": 86.19086021505376,
     "log_lines": 22,
     "cascade_frames": 0.0,
+    "log_appends": 22,
     "status_extra": [
      206.8,
      1034.0,
@@ -1563,7 +2186,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder": {
       "low": 121.41577060931901,
@@ -1581,13 +2204,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 206.8,
       "high": 1034.0,
       "estimate": 345.4,
-      "note": "22 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+      "note": "22 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
      },
      "text post-processing": {
       "low": 0.005990653153153153,
@@ -1619,6 +2242,7 @@
     "frames": 86.19086021505376,
     "log_lines": 22,
     "cascade_frames": 0.0,
+    "log_appends": 22,
     "status_extra": [
      206.8,
      1034.0,
@@ -1629,7 +2253,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder": {
       "low": 242.83154121863802,
@@ -1647,13 +2271,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 206.8,
       "high": 1034.0,
       "estimate": 345.4,
-      "note": "22 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+      "note": "22 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
      },
      "text post-processing": {
       "low": 0.005990653153153153,
@@ -1685,6 +2309,7 @@
     "frames": 86.19086021505376,
     "log_lines": 22,
     "cascade_frames": 0.0,
+    "log_appends": 22,
     "status_extra": [
      206.8,
      1034.0,
@@ -1695,7 +2320,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder": {
       "low": 121.41577060931901,
@@ -1713,13 +2338,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 206.8,
       "high": 1034.0,
       "estimate": 345.4,
-      "note": "22 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+      "note": "22 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
      },
      "text post-processing": {
       "low": 0.007987537537537536,
@@ -1751,6 +2376,7 @@
     "frames": 86.19086021505376,
     "log_lines": 22,
     "cascade_frames": 0.0,
+    "log_appends": 22,
     "status_extra": [
      206.8,
      1034.0,
@@ -1761,7 +2387,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder": {
       "low": 242.83154121863802,
@@ -1779,13 +2405,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 206.8,
       "high": 1034.0,
       "estimate": 345.4,
-      "note": "22 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+      "note": "22 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
      },
      "text post-processing": {
       "low": 0.007987537537537536,
@@ -1817,6 +2443,7 @@
     "frames": 86.19086021505376,
     "log_lines": 22,
     "cascade_frames": 0.0,
+    "log_appends": 22,
     "status_extra": [
      206.8,
      1034.0,
@@ -1827,7 +2454,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder": {
       "low": 121.41577060931901,
@@ -1845,13 +2472,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 206.8,
       "high": 1034.0,
       "estimate": 345.4,
-      "note": "22 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+      "note": "22 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
      },
      "text post-processing": {
       "low": 0.005990653153153153,
@@ -1889,6 +2516,7 @@
     "frames": 86.19086021505376,
     "log_lines": 22,
     "cascade_frames": 0.0,
+    "log_appends": 22,
     "status_extra": [
      206.8,
      1034.0,
@@ -1899,7 +2527,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder": {
       "low": 242.83154121863802,
@@ -1917,13 +2545,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 206.8,
       "high": 1034.0,
       "estimate": 345.4,
-      "note": "22 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
+      "note": "22 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 3-6 µs a line"
      },
      "text post-processing": {
       "low": 0.005990653153153153,
@@ -1961,6 +2589,7 @@
     "frames": 86.19086021505376,
     "log_lines": 22,
     "cascade_frames": 0.0,
+    "log_appends": 22,
     "status_extra": [
      206.8,
      1034.0,
@@ -1971,7 +2600,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder": {
       "low": 121.41577060931901,
@@ -1989,13 +2618,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 206.8,
       "high": 1034.0,
       "estimate": 345.4,
-      "note": "22 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+      "note": "22 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
      },
      "text post-processing": {
       "low": 0.007987537537537536,
@@ -2033,6 +2662,7 @@
     "frames": 86.19086021505376,
     "log_lines": 22,
     "cascade_frames": 0.0,
+    "log_appends": 22,
     "status_extra": [
      206.8,
      1034.0,
@@ -2043,7 +2673,7 @@
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder": {
       "low": 242.83154121863802,
@@ -2061,13 +2691,13 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt": {
       "low": 206.8,
       "high": 1034.0,
       "estimate": 345.4,
-      "note": "22 lines, each an open/append/close of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
+      "note": "22 lines, one append each, of log.txt (status.txt full); console 9.4-47.0 ms an append (estimate 15.7); formatting 4-8 µs a line"
      },
      "text post-processing": {
       "low": 0.007987537537537536,
@@ -2107,17 +2737,18 @@
     "frames": 60.4,
     "log_lines": 19.1,
     "cascade_frames": 0.0,
+    "log_appends": 35.9,
     "status_extra": [
-     179.54000000000002,
-     897.7,
-     299.87
+     206.8,
+     1034.0,
+     345.4
     ],
     "parts": {
      "take (game worker poll)": {
       "low": 0.0,
       "high": 100.0,
       "estimate": 50.0,
-      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main: sceKernelDelayThread(100000) between vjoOcrTake calls"
+      "note": "0-100 ms, mean 50: game_ocr/main.c worker_main until #102: sceKernelDelayThread(100000) between vjoOcrTake calls"
      },
      "capture + finder": {
       "low": 90.83333333333334,
@@ -2135,7 +2766,7 @@
       "low": 0.0,
       "high": 50.0,
       "estimate": 25.0,
-      "note": "0-50 ms, mean 25: shell/game_ocr_client.c vjo_game_ocr_exchange: delay_us(50000) between vjoOcrRead calls"
+      "note": "0-50 ms, mean 25: shell/game_ocr_client.c until #102: delay_us(50000) between vjoOcrRead calls"
      },
      "log.txt (+ status.txt)": {
       "low": 337.46,

@@ -157,13 +157,15 @@ SceUID game_ocr_worker_pid_locked(void)
     return worker_pid > 0 && registration_current(worker_pid) ? worker_pid : 0;
 }
 
+/* No job is queued, claimed or in a model or rows call: the worker is refused
+ * from now on. A job slot left (cancelled, read, or completed and not read yet)
+ * is kept as it is, so an undone stop (game_ocr_stop) leaves the transport as
+ * it found it; a take or read waiting in the kernel wakes and re-checks. */
 int game_ocr_shutdown_locked(void)
 {
     sync_locked();
     if (pending || claimed || model_io.seq || rows.state != ROWS_IDLE) return VJO_ERR_BUSY;
     stopping = 1;
-    invalidate_locked();
-    /* a take or read waiting in the kernel wakes, finds the worker stopping and leaves */
     if (waiters && g.mevf > 0) ksceKernelSetEventFlag(g.mevf, MEV_JOB | MEV_RESULT);
     return 0;
 }
@@ -173,9 +175,35 @@ int game_ocr_waiters_locked(void)
     return waiters;
 }
 
-void game_ocr_stop_failed_locked(void)
+/* module_stop's part: the shutdown, then until the takes and reads it woke have
+ * left their wait (they give their count back under the lock), at most
+ * STOP_DRAIN_POLLS ms, and 1 ms more for the few instructions such a thread
+ * still runs after its unlock. One that does not leave in time fails the stop,
+ * which is undone (the transport works as before; a game worker refused
+ * meanwhile reloads its weights at its next job). 0, or VJO_ERR_BUSY. */
+#define STOP_DRAIN_POLLS 200
+int game_ocr_stop(void)
 {
-    stopping = 0; /* module_stop gave up: the transport works as before the attempt */
+    int busy, woke;
+    VJO_LOCK();
+    busy = game_ocr_shutdown_locked();
+    woke = waiters;
+    VJO_UNLOCK();
+    if (busy) return VJO_ERR_BUSY;
+    for (int i = 0;; i++) {
+        VJO_LOCK();
+        busy = waiters;
+        if (busy && i >= STOP_DRAIN_POLLS) stopping = 0;
+        VJO_UNLOCK();
+        if (!busy) break;
+        if (i >= STOP_DRAIN_POLLS) {
+            klog("module_stop: %d OCR waiter(s) still in the kernel after %d ms; stop undone", busy, STOP_DRAIN_POLLS);
+            return VJO_ERR_BUSY;
+        }
+        ksceKernelDelayThread(1000);
+    }
+    if (woke) ksceKernelDelayThread(1000);
+    return 0;
 }
 
 void game_ocr_shell_changed_locked(void)
